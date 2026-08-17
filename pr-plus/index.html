@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111315" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="PR+" />
+  <meta name="description" content="서버 없이 기기 로컬에 저장하는 점진적 과부하 운동 기록 PWA" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
+  <title>PR+</title>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LOCAL TRAINING LOG</p>
+        <h1>PR+</h1>
+      </div>
+      <button id="installBtn" class="icon-btn" aria-label="앱 설치 안내">＋</button>
+    </header>
+
+    <main id="app" class="content" aria-live="polite"></main>
+
+    <nav class="bottom-nav" aria-label="메인 메뉴">
+      <button data-view="today" class="nav-item active"><span>◉</span><small>오늘</small></button>
+      <button data-view="history" class="nav-item"><span>≡</span><small>기록</small></button>
+      <button data-view="progress" class="nav-item"><span>↗</span><small>성장</small></button>
+      <button data-view="settings" class="nav-item"><span>⚙</span><small>설정</small></button>
+    </nav>
+  </div>
+
+  <dialog id="exerciseDialog" class="sheet-dialog">
+    <form method="dialog" class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title-row">
+        <h2>운동 추가</h2>
+        <button value="cancel" class="ghost-btn">닫기</button>
+      </div>
+      <input id="exerciseSearch" class="text-input" type="search" placeholder="벤치프레스, 랫풀다운..." autocomplete="off" />
+      <div id="exerciseList" class="exercise-picker"></div>
+      <div class="divider"></div>
+      <h3>직접 만들기</h3>
+      <div class="form-grid">
+        <label>운동 이름<input id="customExerciseName" class="text-input" placeholder="예: 머신 숄더프레스" /></label>
+        <label>부위
+          <select id="customExerciseMuscle" class="text-input">
+            <option value="가슴">가슴</option><option value="등">등</option><option value="어깨">어깨</option>
+            <option value="하체">하체</option><option value="이두">이두</option><option value="삼두">삼두</option>
+            <option value="코어">코어</option><option value="기타">기타</option>
+          </select>
+        </label>
+        <label>반복 범위<input id="customRepRange" class="text-input" value="8-12" inputmode="numeric" /></label>
+      </div>
+      <button id="createExerciseBtn" type="button" class="primary-btn wide">운동 생성</button>
+    </form>
+  </dialog>
+
+  <dialog id="installDialog" class="sheet-dialog">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title-row">
+        <div><p class="eyebrow">IPHONE</p><h2>홈 화면에 설치</h2></div>
+        <button id="closeInstallDialog" class="ghost-btn">닫기</button>
+      </div>
+      <ol class="install-steps">
+        <li><b>Safari</b>에서 이 페이지를 연다.</li>
+        <li>아래의 <b>공유</b> 버튼을 누른다.</li>
+        <li><b>홈 화면에 추가</b>를 선택한다.</li>
+        <li><b>웹 앱으로 열기</b>가 보이면 켠 뒤 <b>추가</b>를 누른다.</li>
+      </ol>
+      <p class="muted">설치한 뒤에는 인터넷이 없어도 기록 확인과 입력이 가능해. 데이터는 이 기기의 브라우저 저장소에 남는다.</p>
+      <button id="nativeInstallBtn" class="primary-btn wide hidden">이 기기에 설치</button>
+    </div>
+  </dialog>
+
+  <dialog id="confirmDialog" class="confirm-dialog">
+    <div class="confirm-card">
+      <h3 id="confirmTitle">확인</h3>
+      <p id="confirmMessage" class="muted"></p>
+      <div class="confirm-actions">
+        <button id="confirmCancel" class="secondary-btn">취소</button>
+        <button id="confirmOk" class="danger-btn">확인</button>
+      </div>
+    </div>
+  </dialog>
+
+  <input id="importFile" type="file" accept="application/json,.json" hidden />
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
