@@ -1,0 +1,99 @@
+name: Validate and deploy GitHub Pages
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate PR+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Check required PWA files
+        shell: bash
+        run: |
+          required_files=(
+            pr-plus/index.html
+            pr-plus/app.js
+            pr-plus/styles.css
+            pr-plus/manifest.webmanifest
+            pr-plus/sw.js
+            pr-plus/icons/icon-192.png
+            pr-plus/icons/icon-512.png
+            pr-plus/icons/apple-touch-icon.png
+          )
+
+          for file in "${required_files[@]}"; do
+            test -s "$file" || {
+              echo "Missing or empty required file: $file"
+              exit 1
+            }
+          done
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check pr-plus/app.js
+          node --check pr-plus/sw.js
+
+      - name: Check web app manifest
+        run: python3 -m json.tool pr-plus/manifest.webmanifest > /dev/null
+
+      - name: Smoke-test static routes
+        shell: bash
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 --directory . > /tmp/pr-plus-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+
+          for attempt in {1..10}; do
+            if curl --fail --silent http://127.0.0.1:8080/pr-plus/ > /dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 10 ]; then
+              cat /tmp/pr-plus-http.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          for asset in app.js styles.css manifest.webmanifest sw.js; do
+            curl --fail --silent "http://127.0.0.1:8080/pr-plus/$asset" > /dev/null
+          done
+
+  deploy:
+    name: Deploy Pages
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
