@@ -2,6 +2,9 @@ import {
   DATA_SCHEMA_VERSION,
   DEFAULT_EXERCISES,
   createDefaultRoutines,
+  defaultRoutineIdForMuscle,
+  nextTrainingDayBoundary,
+  trainingDayKey,
   migrateBackupToLatest,
   migrateBackupV1ToV2,
   migrateBackupV2ToV3,
@@ -36,6 +39,16 @@ function run() {
   assert(back.items[0].trackingMode === 'duration' && back.items[0].durationMin === 10 && back.items[0].durationMax === 60, 'Dead Hang은 10–60초 시간 기반이어야 한다.');
   assert(DEFAULT_EXERCISES.find(exercise => exercise.name === 'Dead Hang').trackingMode === 'duration', 'Dead Hang 운동은 시간 기반이어야 한다.');
   assert(DEFAULT_EXERCISES.filter(exercise => exercise.trackingMode === 'reps').length === 28, '나머지 기본 운동 28개는 횟수 기반이어야 한다.');
+  assert(defaultRoutineIdForMuscle('chest') === 'routine-chest', '가슴 운동의 기본 선택은 Chest여야 한다.');
+  assert(defaultRoutineIdForMuscle('triceps') === 'routine-chest', '삼두 운동의 기본 선택은 Chest여야 한다.');
+  assert(defaultRoutineIdForMuscle('back') === 'routine-back' && defaultRoutineIdForMuscle('biceps') === 'routine-back', '등과 이두 운동의 기본 선택은 Back이어야 한다.');
+  assert(defaultRoutineIdForMuscle('shoulders') === 'routine-shoulders', '어깨 운동의 기본 선택은 Shoulders여야 한다.');
+  assert(defaultRoutineIdForMuscle('legs') === 'routine-legs', '하체 운동의 기본 선택은 Legs여야 한다.');
+  assert(defaultRoutineIdForMuscle('core') === null, '전용 루틴이 없는 부위는 잘못된 기본 루틴을 선택하면 안 된다.');
+  assert(trainingDayKey(new Date(2026, 7, 19, 6, 59)) === '2026-08-18', '오전 6:59 기록은 전날 운동이어야 한다.');
+  assert(trainingDayKey(new Date(2026, 7, 19, 7, 0)) === '2026-08-19', '오전 7:00부터 새 운동일이어야 한다.');
+  const nextBoundary = nextTrainingDayBoundary(new Date(2026, 7, 19, 7, 0));
+  assert(nextBoundary.getDate() === 20 && nextBoundary.getHours() === 7, '오전 7시 이후 다음 갱신은 다음 날 오전 7시여야 한다.');
   assert(back.items.find(item => item.exerciseId === 'exercise-straight-arm-pulldown')?.optional, 'Straight-Arm Pulldown은 선택 운동이어야 한다.');
   assert(shoulders.items.length === 4, 'Shoulders 기본 루틴은 4개 운동이어야 한다.');
   assert(legs.items[0].exerciseId === 'exercise-hack-squat', 'Legs 기본 첫 운동은 Hack Squat이어야 한다.');

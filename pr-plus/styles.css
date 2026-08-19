@@ -183,12 +183,18 @@ button:disabled { opacity: .45; }
 .routine-card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; }
 .history-card { padding-top: 0; padding-bottom: 0; }
 .history-entry:last-child .history-item { border-bottom: 0; }
+.rest-entry .history-item { color: #88919a; }
+.rest-entry .history-main strong { color: #9aa3ac; }
+.rest-entry .ghost-btn { border: 1px solid var(--line); }
 .history-detail { display: grid; gap: 9px; padding: 4px 8px 14px 74px; border-bottom: 1px solid var(--line); }
 .history-detail div { display: grid; gap: 2px; }
 .history-exercise { display: grid; gap: 2px; border: 0; padding: 0; background: transparent; color: var(--text); text-align: left; }
 .history-exercise b { font-size: 11px; }
 .history-exercise span { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .history-note { margin: 5px 0 0; padding: 9px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 10px; line-height: 1.45; }
+.history-edit-btn { justify-self: start; margin-top: 3px; }
+.history-more { margin: 2px 0 14px; }
+.history-end { text-align: center; margin: 12px 0 20px; }
 .history-detail b { font-size: 11px; }
 .history-detail span { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .subsection-head { margin: 25px 2px 12px; }
@@ -214,6 +220,36 @@ button:disabled { opacity: .45; }
 .line-chart polyline { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .line-chart circle { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
 .chart-range { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
+.growth-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin-bottom: 12px; }
+.growth-card { min-width: 0; display: grid; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
+.growth-card > span, .growth-card > small { color: var(--muted); font-size: 9px; }
+.growth-card b { overflow: hidden; text-overflow: ellipsis; font-size: 17px; }
+.growth-card b small { margin-left: 2px; color: var(--muted); font-size: 9px; }
+.growth-card em { font-size: 11px; font-style: normal; font-weight: 850; }
+.growth-card em.up { color: var(--accent); }
+.growth-card em.down { color: #ff9a9a; }
+.growth-card em.flat { color: var(--muted); }
+.trend-card { display: grid; gap: 5px; }
+.trend-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.trend-head p { margin: 0; }
+.trend-head b { font-size: 14px; }
+.limitation-badge { color: #ffcf7a; background: rgba(255,185,70,.1); }
+.edit-log-list { display: grid; gap: 11px; }
+.edit-log { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface-2); }
+.edit-log-head { display: flex; justify-content: space-between; align-items: start; gap: 10px; }
+.edit-log-head > div { display: grid; gap: 3px; }
+.edit-log-head small { color: var(--muted); font-size: 9px; }
+.edit-sets { display: grid; gap: 8px; }
+.edit-set-row { display: grid; grid-template-columns: 20px repeat(3,minmax(0,1fr)) auto auto; align-items: end; gap: 5px; }
+.edit-set-row > b { align-self: center; color: var(--muted); font-size: 11px; text-align: center; }
+.edit-set-row label { min-width: 0; display: grid; gap: 3px; color: var(--muted); font-size: 8px; }
+.edit-set-row .set-input { padding: 9px 3px; }
+.edit-done { justify-items: center; }
+.edit-done input { width: 23px; height: 23px; accent-color: var(--accent); }
+.edit-add-exercise { margin-top: 12px; }
+.session-edit-actions { display: grid; grid-template-columns: repeat(2,1fr); gap: 8px; margin-top: 14px; }
+.session-edit-actions > :only-child { grid-column: 1 / -1; }
+.compact-empty { margin: 0; padding: 22px 12px; }
 .metric-row { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); text-align: left; }
 .metric-row:last-child { border-bottom: 0; }
 .metric-row span { display: grid; gap: 3px; }

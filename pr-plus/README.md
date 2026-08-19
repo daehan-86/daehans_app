@@ -33,12 +33,21 @@ daehans_app/
 - Double Progression 다음 반복·시간·중량 목표, RIR 보류 판정, PR 표시
 - Assisted Pull-Up 보조 중량 감소 방향 계산 및 사용자 지정 증가폭/기구 단위 반올림
 - 세트 완료 시 휴식 타이머, 운동·세션 메모, 즐겨찾기
-- 총 볼륨, 주간 hard set, 훈련 빈도, e1RM(Epley), 체중 기록·그래프
+- 운동 부위에 맞춘 Library 기본 루틴 선택
+- 오전 7시 운동일 갱신(00:00–06:59 수행은 전날 기록)
+- 첫 기록 이후 미등록일 휴식 표시, 과거 날짜 기록 추가·수정·삭제
+- 총 볼륨, 주간 hard set, 훈련 빈도, e1RM(Epley), 체중과 8주 성장 추세 그래프
 - Exercise / Routine / Session / 설정 JSON 전체 백업·복원
 - 기존 `OVERLOAD` 및 PR+ v2/v3 백업의 순차 migration
 - Service Worker 오프라인 캐시
 - 앱 안의 현재 버전 표시, 새 릴리스 확인, 사용자 선택 업데이트
 - iPhone Home Screen Web App용 manifest / icon / 설치 안내
+
+## 운동일과 아이폰 타이머
+
+- PR+의 하루는 현지 시각 오전 7시에 시작합니다. 자정부터 오전 6시 59분까지 시작한 기록은 전날 운동일에 저장됩니다.
+- 앱이 열린 상태에서는 오전 7시에 자동 갱신하고, 다른 앱을 사용하다 돌아온 경우에도 즉시 날짜와 타이머를 현재 시각에 맞춥니다.
+- GitHub Pages PWA는 iOS의 `ActivityKit`을 사용할 수 없어 Dynamic Island/Live Activity에 타이머를 표시할 수 없습니다. 이 기능은 향후 SwiftUI·WidgetKit 확장을 포함한 네이티브 iOS 앱이 필요합니다.
 
 ## PC에서 테스트
 
@@ -131,7 +140,7 @@ PR+의 manifest와 Service Worker는 상대경로와 `./` scope를 사용하므�
 
 브랜드명은 `PR+`로 변경했지만 IndexedDB 이름은 기존 `overload-db`를 유지합니다. 같은 배포 URL에서 기존 앱을 PR+로 업데이트할 때 이미 저장된 운동 기록을 그대로 유지하기 위한 선택입니다.
 
-PR+ v0.2의 IndexedDB 버전은 `2`, 백업/저장 데이터 schema는 `4`입니다. 기존 데이터는 `v1 → v2 → v3 → v4` 인접 migration을 순서대로 거치며, 변환이 완료되기 전에는 기존 데이터를 삭제하지 않습니다. 상세 규칙은 [`MIGRATIONS.md`](./MIGRATIONS.md)를 참고하세요.
+PR+ v0.2.1의 IndexedDB 버전은 `2`, 백업/저장 데이터 schema는 `4`입니다. v0.2.1은 저장 구조를 바꾸지 않으므로 v0.2.0 기록을 그대로 읽습니다. 더 오래된 데이터는 `v1 → v2 → v3 → v4` 인접 migration을 순서대로 거치며, 변환이 완료되기 전에는 기존 데이터를 삭제하지 않습니다. 상세 규칙은 [`MIGRATIONS.md`](./MIGRATIONS.md)를 참고하세요.
 
 ## v0.2 기록 방식과 추천 정책
 
