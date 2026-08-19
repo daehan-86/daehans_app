@@ -4,7 +4,8 @@ import {
   createDefaultRoutines,
   migrateBackupToLatest,
   migrateBackupV1ToV2,
-  migrateBackupV2ToV3
+  migrateBackupV2ToV3,
+  migrateBackupV3ToV4
 } from '../data.mjs';
 
 function assert(condition, message) {
@@ -32,6 +33,9 @@ function run() {
   const legs = routines.find(routine => routine.id === 'routine-legs');
   assert(chest.items.reduce((sum, item) => sum + item.targetSets, 0) === 13, 'Chest 루틴은 13세트여야 한다.');
   assert(back.items[0].type === 'warmup', 'Back 루틴은 Dead Hang 준비운동으로 시작해야 한다.');
+  assert(back.items[0].trackingMode === 'duration' && back.items[0].durationMin === 10 && back.items[0].durationMax === 60, 'Dead Hang은 10–60초 시간 기반이어야 한다.');
+  assert(DEFAULT_EXERCISES.find(exercise => exercise.name === 'Dead Hang').trackingMode === 'duration', 'Dead Hang 운동은 시간 기반이어야 한다.');
+  assert(DEFAULT_EXERCISES.filter(exercise => exercise.trackingMode === 'reps').length === 28, '나머지 기본 운동 28개는 횟수 기반이어야 한다.');
   assert(back.items.find(item => item.exerciseId === 'exercise-straight-arm-pulldown')?.optional, 'Straight-Arm Pulldown은 선택 운동이어야 한다.');
   assert(shoulders.items.length === 4, 'Shoulders 기본 루틴은 4개 운동이어야 한다.');
   assert(legs.items[0].exerciseId === 'exercise-hack-squat', 'Legs 기본 첫 운동은 Hack Squat이어야 한다.');
@@ -44,7 +48,7 @@ function run() {
   };
   const originalV1 = stable(v1);
   const migratedV1 = migrateBackupToLatest(v1);
-  const chainedV1 = migrateBackupV2ToV3(migrateBackupV1ToV2(v1));
+  const chainedV1 = migrateBackupV3ToV4(migrateBackupV2ToV3(migrateBackupV1ToV2(v1)));
   assert(stable(v1) === originalV1, 'migration은 입력 백업을 직접 변경하면 안 된다.');
   assert(stable(migratedV1) === stable(chainedV1), 'v1은 v1→v2→v3 순서로 전이돼야 한다.');
   assert(migratedV1.schemaVersion === DATA_SCHEMA_VERSION, 'v1 백업은 최신 schema가 되어야 한다.');
@@ -60,22 +64,46 @@ function run() {
     settings: []
   };
   const migratedV2 = migrateBackupToLatest(v2);
-  assert(migratedV2.schemaVersion === 3, 'v2 백업은 v3로 전이돼야 한다.');
-  assert(Array.isArray(migratedV2.routines), 'v3 백업에는 routines 배열이 있어야 한다.');
+  assert(migratedV2.schemaVersion === 4, 'v2 백업은 v4로 전이돼야 한다.');
+  assert(Array.isArray(migratedV2.routines), 'v4 백업에는 routines 배열이 있어야 한다.');
   assert(migratedV2.exercises[0].name === 'My Exercise', '사용자 운동명은 보존해야 한다.');
-  assert(migratedV2.settings.some(setting => setting.key === 'schemaVersion' && setting.value === 3), '현재 schema 설정을 기록해야 한다.');
+  assert(migratedV2.settings.some(setting => setting.key === 'schemaVersion' && setting.value === 4), '현재 schema 설정을 기록해야 한다.');
 
   const v3 = {
     app: 'PR+', schemaVersion: 3, version: 3,
-    exercises: [{ id: 'exercise-v3', name: 'Current Exercise' }],
-    routines: [{ id: 'routine-v3', name: 'Current', items: [] }],
-    sessions: [{ id: 'session-v3', date: '2026-03-03', exercises: [] }],
+    exercises: [{ id: 'exercise-dead-hang', name: 'Dead Hang', type: 'warmup' }],
+    routines: [{ id: 'routine-v3', name: 'Current', items: [{ exerciseId: 'exercise-dead-hang', targetSets: 1, repMin: 0, repMax: 0, type: 'warmup' }] }],
+    sessions: [{ id: 'session-v3', date: '2026-03-03', exercises: [{ exerciseId: 'exercise-dead-hang', sets: [{ completed: true }] }] }],
     settings: [{ key: 'schemaVersion', value: 3 }]
   };
-  assert(stable(migrateBackupToLatest(v3)) === stable(v3), '현재 schema 백업은 내용이 바뀌면 안 된다.');
+  const originalV3 = stable(v3);
+  const migratedV3 = migrateBackupToLatest(v3);
+  assert(stable(v3) === originalV3, 'v3→v4 migration은 입력을 직접 변경하면 안 된다.');
+  assert(migratedV3.schemaVersion === 4, 'v3 백업은 v4로 전이돼야 한다.');
+  assert(migratedV3.exercises[0].trackingMode === 'duration', 'v3 Dead Hang은 시간 기반으로 전이돼야 한다.');
+  assert(migratedV3.routines[0].items[0].durationMax === 60, 'v3 Dead Hang 루틴은 초 단위 목표를 받아야 한다.');
+  assert(migratedV3.sessions[0].exercises[0].sets[0].duration === '', '기존 완료 기록은 보존하고 빈 시간 필드를 추가해야 한다.');
+  assert(migratedV3.settings.some(setting => setting.key === 'restTimerSeconds' && setting.value === 120), 'v4 휴식 타이머 기본 설정을 추가해야 한다.');
+  assert(migratedV3.settings.some(setting => setting.key === 'bodyWeightEntries' && Array.isArray(setting.value)), 'v4 체중 기록 설정을 추가해야 한다.');
+
+  const v4 = {
+    app: 'PR+', schemaVersion: 4, version: 4,
+    exercises: [{ id: 'exercise-v4', name: 'Current Exercise', trackingMode: 'reps' }],
+    routines: [{ id: 'routine-v4', name: 'Current', items: [] }],
+    sessions: [{ id: 'session-v4', date: '2026-04-04', exercises: [] }],
+    settings: [{ key: 'schemaVersion', value: 4 }]
+  };
+  assert(stable(migrateBackupToLatest(v4)) === stable(v4), '현재 schema 백업은 내용이 바뀌면 안 된다.');
+  let invalidV4Rejected = false;
+  try {
+    migrateBackupToLatest({ ...v4, exercises: [{ ...v4.exercises[0], trackingMode: 'duration', durationMin: 60, durationMax: 10 }] });
+  } catch {
+    invalidV4Rejected = true;
+  }
+  assert(invalidV4Rejected, '손상된 v4 시간 범위를 복원하면 안 된다.');
   let futureRejected = false;
   try {
-    migrateBackupToLatest({ ...v3, schemaVersion: 4, version: 4 });
+    migrateBackupToLatest({ ...v4, schemaVersion: 5, version: 5 });
   } catch {
     futureRejected = true;
   }

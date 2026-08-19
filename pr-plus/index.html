@@ -23,7 +23,7 @@
         <h1>PR+</h1>
       </div>
       <div class="topbar-actions">
-        <button id="versionBtn" class="version-pill" aria-label="업데이트 확인">v0.1.0</button>
+        <button id="versionBtn" class="version-pill" aria-label="업데이트 확인">v0.2.0</button>
         <button id="installBtn" class="icon-btn" aria-label="앱 설치 안내">＋</button>
       </div>
     </header>
@@ -31,6 +31,12 @@
     <aside id="updateBanner" class="update-banner hidden" role="status" aria-live="polite">
       <div><b id="updateBannerTitle">새 버전 준비 완료</b><span id="updateBannerMessage">업데이트하면 앱이 한 번 다시 열려.</span></div>
       <button id="applyUpdateBtn" class="primary-btn compact-btn">업데이트</button>
+    </aside>
+
+    <aside id="restTimer" class="rest-timer hidden" role="timer" aria-live="polite">
+      <div><span>REST</span><b id="restTimerValue">02:00</b></div>
+      <button id="restAddBtn" class="ghost-btn">＋30초</button>
+      <button id="restDismissBtn" class="secondary-btn compact-btn">종료</button>
     </aside>
 
     <main id="app" class="content" aria-live="polite"></main>
@@ -68,10 +74,27 @@
             <option value="core">코어</option><option value="other">기타</option>
           </select>
         </label>
-        <label>반복 범위<input id="customRepRange" class="text-input" value="8-12" inputmode="numeric" /></label>
+        <label>기록 방식
+          <select id="customTrackingMode" class="text-input"><option value="reps">횟수</option><option value="duration">시간(초)</option></select>
+        </label>
+        <label>중량 방식
+          <select id="customLoadMode" class="text-input"><option value="external">외부 중량</option><option value="assistance">보조 중량</option><option value="bodyweight">맨몸 / 추가 중량</option><option value="none">중량 없음</option></select>
+        </label>
+        <label id="customTargetRangeLabel">반복 범위<input id="customTargetRange" class="text-input" value="8-12" inputmode="numeric" /></label>
       </div>
       <button id="createExerciseBtn" type="button" class="primary-btn wide">운동 생성</button>
     </form>
+  </dialog>
+
+  <dialog id="exerciseDetailDialog" class="sheet-dialog">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title-row">
+        <div><p class="eyebrow">EXERCISE</p><h2 id="exerciseDetailTitle">운동 상세</h2></div>
+        <button id="closeExerciseDetailDialog" class="ghost-btn">닫기</button>
+      </div>
+      <div id="exerciseDetailContent"></div>
+    </div>
   </dialog>
 
   <dialog id="installDialog" class="sheet-dialog">
