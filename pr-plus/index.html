@@ -22,8 +22,16 @@
         <p class="eyebrow">LOCAL TRAINING LOG</p>
         <h1>PR+</h1>
       </div>
-      <button id="installBtn" class="icon-btn" aria-label="앱 설치 안내">＋</button>
+      <div class="topbar-actions">
+        <button id="versionBtn" class="version-pill" aria-label="업데이트 확인">v0.1.0</button>
+        <button id="installBtn" class="icon-btn" aria-label="앱 설치 안내">＋</button>
+      </div>
     </header>
+
+    <aside id="updateBanner" class="update-banner hidden" role="status" aria-live="polite">
+      <div><b id="updateBannerTitle">새 버전 준비 완료</b><span id="updateBannerMessage">업데이트하면 앱이 한 번 다시 열려.</span></div>
+      <button id="applyUpdateBtn" class="primary-btn compact-btn">업데이트</button>
+    </aside>
 
     <main id="app" class="content" aria-live="polite"></main>
 

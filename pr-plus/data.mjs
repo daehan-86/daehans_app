@@ -1,4 +1,5 @@
 export const APP_VERSION = '0.1.0';
+export const RELEASE_ID = '0.1.0-r2';
 export const DATA_SCHEMA_VERSION = 3;
 export const DB_NAME = 'overload-db';
 export const DB_VERSION = 2;
