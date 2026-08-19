@@ -31,6 +31,7 @@
 - `pr-plus/data.mjs`, `pr-plus/version.json`, `pr-plus/sw.js`의 `releaseId`는 항상 같아야 하며, 공개 앱 버전과 데이터 schema version은 별도로 관리한다.
 - Service Worker는 새 캐시를 설치하고 이전 PR+ 캐시를 정리해야 한다.
 - 설치된 앱에서는 새 Service Worker를 대기 상태로 두고 사용자에게 알린 뒤, 사용자가 업데이트를 선택했을 때만 전환하고 다시 연다. 운동 기록 중 임의로 새로고침하지 않는다.
+- 인앱 업데이트 UI가 없던 legacy cache에서 최초 전환할 때만 `skipWaiting`을 허용한다. 이 경우에도 열린 화면을 강제 reload하지 않고 다음 실행부터 새 버전을 사용한다.
 - Service Worker와 manifest의 경로는 `/pr-plus/` 배포를 고려한 상대경로를 유지한다.
 - 변경 후 설치된 iPhone PWA가 새 버전을 받을 수 있는지 확인한다.
 

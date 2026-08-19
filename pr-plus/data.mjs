@@ -1,6 +1,6 @@
-export const APP_VERSION = '0.1.0';
-export const RELEASE_ID = '0.1.0-r2';
-export const DATA_SCHEMA_VERSION = 3;
+export const APP_VERSION = '0.2.0';
+export const RELEASE_ID = '0.2.0-r1';
+export const DATA_SCHEMA_VERSION = 4;
 export const DB_NAME = 'overload-db';
 export const DB_VERSION = 2;
 export const STORES = {
@@ -33,9 +33,9 @@ export const DEFAULT_EXERCISES = [
   ['machine-chest-press', 'Machine Chest Press', '머신 체스트프레스', 'chest', 8, 12],
   ['pec-deck-fly', 'Pec Deck Fly', '펙덱 플라이', 'chest', 10, 15],
   ['lying-triceps-extension', 'Lying Triceps Extension', '라잉 트라이셉스 익스텐션', 'triceps', 8, 12],
-  ['dead-hang', 'Dead Hang', '데드 행', 'back', 0, 0, 'warmup'],
-  ['assisted-pull-up', 'Assisted Pull-Up', '어시스트 풀업', 'back', 6, 10],
-  ['pull-up', 'Pull-Up', '풀업', 'back', 5, 10],
+  ['dead-hang', 'Dead Hang', '데드 행', 'back', 0, 0, 'warmup', { trackingMode: 'duration', durationMin: 10, durationMax: 60, loadMode: 'none', metricIncrement: 5 }],
+  ['assisted-pull-up', 'Assisted Pull-Up', '어시스트 풀업', 'back', 6, 10, 'strength', { loadMode: 'assistance' }],
+  ['pull-up', 'Pull-Up', '풀업', 'back', 5, 10, 'strength', { loadMode: 'bodyweight' }],
   ['straight-arm-pulldown', 'Straight-Arm Pulldown', '스트레이트 암 풀다운', 'back', 12, 15],
   ['lat-pulldown', 'Lat Pulldown', '랫풀다운', 'back', 8, 12],
   ['barbell-row', 'Barbell Row', '바벨 로우', 'back', 6, 10],
@@ -56,7 +56,7 @@ export const DEFAULT_EXERCISES = [
   ['leg-extension', 'Leg Extension', '레그 익스텐션', 'legs', 10, 15],
   ['standing-calf-raise', 'Standing Calf Raise', '스탠딩 카프 레이즈', 'legs', 8, 15],
   ['seated-calf-raise', 'Seated Calf Raise', '시티드 카프 레이즈', 'legs', 8, 15]
-].map(([slug, name, displayName, muscleGroup, repMin, repMax, type = 'strength']) => ({
+].map(([slug, name, displayName, muscleGroup, repMin, repMax, type = 'strength', options = {}]) => ({
   id: `exercise-${slug}`,
   name,
   displayName,
@@ -65,6 +65,17 @@ export const DEFAULT_EXERCISES = [
   repMin,
   repMax,
   type,
+  trackingMode: options.trackingMode || 'reps',
+  durationMin: options.durationMin ?? 0,
+  durationMax: options.durationMax ?? 0,
+  metricIncrement: options.metricIncrement ?? 1,
+  loadMode: options.loadMode || 'external',
+  weightIncrement: null,
+  weightStep: null,
+  targetRIRMin: 1,
+  targetRIRMax: 3,
+  favorite: false,
+  notes: '',
   builtIn: true,
   createdAt: 0
 }));
@@ -103,7 +114,7 @@ const ROUTINE_DEFINITIONS = [
   {
     id: 'routine-back', name: 'Back', displayName: '등',
     items: [
-      ['Dead Hang', 1, 0, 0, false, 'warmup'],
+      ['Dead Hang', 1, 10, 60, false, 'warmup'],
       ['Assisted Pull-Up', 3, 6, 10],
       ['Barbell Row', 3, 6, 10],
       ['Lat Pulldown', 3, 8, 12],
@@ -137,6 +148,7 @@ const ROUTINE_DEFINITIONS = [
 const clone = value => JSON.parse(JSON.stringify(value));
 const asArray = value => Array.isArray(value) ? value : [];
 const finiteNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+const optionalPositiveNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) <= 0 ? null : Number(value);
 
 export function muscleLabel(muscleGroup) {
   return MUSCLE_LABELS[muscleGroup] || muscleGroup || MUSCLE_LABELS.other;
@@ -164,6 +176,8 @@ export function normalizeExercise(exercise) {
   const name = matched?.name || String(source.name || source.displayName || 'Unnamed Exercise').trim();
   const displayName = matched?.displayName || String(source.displayName || '').trim();
   const muscleGroup = matched?.muscleGroup || normalizeMuscleGroup(source.muscleGroup || source.muscle);
+  const trackingMode = source.trackingMode === 'duration' || (!source.trackingMode && matched?.trackingMode === 'duration') ? 'duration' : 'reps';
+  const loadMode = ['external', 'assistance', 'bodyweight', 'none'].includes(source.loadMode) ? source.loadMode : matched?.loadMode || (trackingMode === 'duration' ? 'none' : 'external');
   return {
     ...source,
     id: String(source.id || matched?.id || `exercise-${Date.now()}`),
@@ -173,6 +187,17 @@ export function normalizeExercise(exercise) {
     muscle: muscleLabel(muscleGroup),
     repMin: finiteNumber(source.repMin, matched?.repMin ?? 8),
     repMax: finiteNumber(source.repMax, matched?.repMax ?? 12),
+    durationMin: Math.max(0, finiteNumber(source.durationMin, matched?.durationMin ?? (trackingMode === 'duration' ? 10 : 0))),
+    durationMax: Math.max(0, finiteNumber(source.durationMax, matched?.durationMax ?? (trackingMode === 'duration' ? 60 : 0))),
+    trackingMode,
+    metricIncrement: Math.max(1, finiteNumber(source.metricIncrement, matched?.metricIncrement ?? (trackingMode === 'duration' ? 5 : 1))),
+    loadMode,
+    weightIncrement: optionalPositiveNumber(source.weightIncrement),
+    weightStep: optionalPositiveNumber(source.weightStep),
+    targetRIRMin: Math.max(0, finiteNumber(source.targetRIRMin, matched?.targetRIRMin ?? 1)),
+    targetRIRMax: Math.max(0, finiteNumber(source.targetRIRMax, matched?.targetRIRMax ?? 3)),
+    favorite: Boolean(source.favorite),
+    notes: String(source.notes || ''),
     type: source.type || matched?.type || 'strength',
     builtIn: Boolean(source.builtIn || matched),
     createdAt: finiteNumber(source.createdAt, 0)
@@ -185,17 +210,26 @@ export function normalizeSession(session) {
     ...source,
     id: String(source.id || ''),
     date: String(source.date || '').slice(0, 10),
-    exercises: asArray(source.exercises).map(log => ({
+    notes: String(source.notes || ''),
+    exercises: asArray(source.exercises).map(log => {
+      const matched = DEFAULT_EXERCISES.find(exercise => exercise.id === log.exerciseId) || findDefaultExercise(log.name);
+      const trackingMode = log.trackingMode === 'duration' || (!log.trackingMode && matched?.trackingMode === 'duration') ? 'duration' : 'reps';
+      return {
       ...log,
       exerciseId: String(log.exerciseId || ''),
+      trackingMode,
+      loadMode: ['external', 'assistance', 'bodyweight', 'none'].includes(log.loadMode) ? log.loadMode : matched?.loadMode || (trackingMode === 'duration' ? 'none' : 'external'),
+      durationMin: Math.max(0, finiteNumber(log.durationMin, matched?.durationMin ?? 0)),
+      durationMax: Math.max(0, finiteNumber(log.durationMax, matched?.durationMax ?? 0)),
       sets: asArray(log.sets).map(set => ({
         ...set,
         weight: set.weight ?? '',
         reps: set.reps ?? '',
+        duration: set.duration ?? '',
         rir: set.rir ?? '',
         done: Boolean(set.done ?? set.completed)
       }))
-    }))
+    }; })
   };
 }
 
@@ -207,15 +241,22 @@ export function normalizeRoutine(routine) {
     name: String(source.name || 'Routine'),
     displayName: String(source.displayName || ''),
     order: Math.max(0, finiteNumber(source.order, 0)),
-    items: asArray(source.items).map((item, index) => ({
+    items: asArray(source.items).map((item, index) => {
+      const matched = DEFAULT_EXERCISES.find(exercise => exercise.id === item.exerciseId);
+      const trackingMode = item.trackingMode === 'duration' || (!item.trackingMode && matched?.trackingMode === 'duration') ? 'duration' : 'reps';
+      return {
       exerciseId: String(item.exerciseId || ''),
       order: index,
       targetSets: Math.max(1, finiteNumber(item.targetSets, 3)),
       repMin: Math.max(0, finiteNumber(item.repMin, 8)),
       repMax: Math.max(0, finiteNumber(item.repMax, 12)),
+      durationMin: Math.max(0, finiteNumber(item.durationMin, matched?.durationMin ?? (trackingMode === 'duration' ? 10 : 0))),
+      durationMax: Math.max(0, finiteNumber(item.durationMax, matched?.durationMax ?? (trackingMode === 'duration' ? 60 : 0))),
+      trackingMode,
+      loadMode: ['external', 'assistance', 'bodyweight', 'none'].includes(item.loadMode) ? item.loadMode : matched?.loadMode || (trackingMode === 'duration' ? 'none' : 'external'),
       optional: Boolean(item.optional),
       type: item.type || 'strength'
-    }))
+    }; })
   };
 }
 
@@ -229,9 +270,15 @@ export function createDefaultRoutines(exercises) {
     builtIn: true,
     createdAt: 0,
     updatedAt: 0,
-    items: definition.items.map(([name, targetSets, repMin, repMax, optional = false, type = 'strength'], order) => {
+    items: definition.items.map(([name, targetSets, targetMin, targetMax, optional = false, type = 'strength'], order) => {
       const exercise = records.find(candidate => candidate.name === name) || DEFAULT_EXERCISES.find(candidate => candidate.name === name);
-      return { exerciseId: exercise.id, order, targetSets, repMin, repMax, optional, type };
+      const duration = exercise.trackingMode === 'duration';
+      return {
+        exerciseId: exercise.id, order, targetSets,
+        repMin: duration ? 0 : targetMin, repMax: duration ? 0 : targetMax,
+        durationMin: duration ? targetMin : 0, durationMax: duration ? targetMax : 0,
+        trackingMode: exercise.trackingMode, loadMode: exercise.loadMode, optional, type
+      };
     })
   }));
 }
@@ -268,9 +315,28 @@ export function migrateBackupV2ToV3(data) {
   };
 }
 
+export function migrateBackupV3ToV4(data) {
+  const settings = asArray(data?.settings).filter(setting => setting?.key !== 'schemaVersion');
+  if (!settings.some(setting => setting?.key === 'restTimerSeconds')) settings.push({ key: 'restTimerSeconds', value: 120 });
+  if (!settings.some(setting => setting?.key === 'bodyWeightEntries')) settings.push({ key: 'bodyWeightEntries', value: [] });
+  settings.push({ key: 'schemaVersion', value: 4 });
+  return {
+    ...clone(data),
+    app: 'PR+',
+    appVersion: APP_VERSION,
+    version: 4,
+    schemaVersion: 4,
+    exercises: asArray(data?.exercises).map(normalizeExercise),
+    routines: asArray(data?.routines).map(normalizeRoutine),
+    sessions: asArray(data?.sessions).map(normalizeSession),
+    settings
+  };
+}
+
 const BACKUP_MIGRATIONS = {
   1: migrateBackupV1ToV2,
-  2: migrateBackupV2ToV3
+  2: migrateBackupV2ToV3,
+  3: migrateBackupV3ToV4
 };
 
 function validateRecordIds(records, label) {
@@ -296,6 +362,18 @@ export function validateBackup(data) {
   asArray(data.routines).forEach(routine => {
     if (!Array.isArray(routine.items)) throw new Error(`루틴 운동 목록이 올바르지 않아: ${routine.id}`);
   });
+  if (data.schemaVersion === 4) {
+    data.exercises.forEach(exercise => {
+      if (!['reps', 'duration'].includes(exercise.trackingMode)) throw new Error(`운동 기록 방식이 올바르지 않아: ${exercise.id}`);
+      if (!['external', 'assistance', 'bodyweight', 'none'].includes(exercise.loadMode || 'external')) throw new Error(`운동 중량 방식이 올바르지 않아: ${exercise.id}`);
+      if (exercise.trackingMode === 'duration' && finiteNumber(exercise.durationMin) > finiteNumber(exercise.durationMax)) throw new Error(`운동 시간 범위가 올바르지 않아: ${exercise.id}`);
+      if (exercise.trackingMode === 'reps' && finiteNumber(exercise.repMin) > finiteNumber(exercise.repMax)) throw new Error(`운동 반복 범위가 올바르지 않아: ${exercise.id}`);
+    });
+    data.sessions.forEach(session => session.exercises.forEach(log => {
+      if (!['reps', 'duration'].includes(log.trackingMode)) throw new Error(`세션 운동 기록 방식이 올바르지 않아: ${session.id}`);
+      if (!Array.isArray(log.sets)) throw new Error(`세션 세트 목록이 올바르지 않아: ${session.id}`);
+    }));
+  }
   return true;
 }
 

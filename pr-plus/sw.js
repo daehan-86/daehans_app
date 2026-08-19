@@ -1,12 +1,16 @@
 const CACHE_PREFIX = 'pr-plus-';
-const RELEASE_ID = '0.1.0-r2';
+const LEGACY_AUTO_UPDATE_CACHE = 'pr-plus-v0.1.0';
+const RELEASE_ID = '0.2.0-r1';
 const CACHE = `pr-plus-${RELEASE_ID}`;
 const ASSETS = [
-  './', './index.html', './styles.css', './app.js', './data.mjs', './version.json', './manifest.webmanifest',
+  './', './index.html', './styles.css', './app.js', './data.mjs', './progression.mjs', './version.json', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'
 ];
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(async () => {
+    const keys = await caches.keys();
+    if (keys.includes(LEGACY_AUTO_UPDATE_CACHE)) await self.skipWaiting();
+  }));
 });
 self.addEventListener('activate', event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim()));
