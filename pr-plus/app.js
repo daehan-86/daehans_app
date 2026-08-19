@@ -1,5 +1,5 @@
 import {
-  APP_VERSION, DATA_SCHEMA_VERSION, DB_NAME, DB_VERSION, STORES, DEFAULT_EXERCISES,
+  APP_VERSION, RELEASE_ID, DATA_SCHEMA_VERSION, DB_NAME, DB_VERSION, STORES, DEFAULT_EXERCISES,
   createDefaultRoutines, findDefaultExercise, migrateBackupToLatest, muscleLabel,
   normalizeExercise, normalizeRoutine, normalizeSession
 } from './data.mjs';
@@ -7,7 +7,9 @@ import {
 const state = {
   view: 'today', db: null, exercises: [], routines: [], sessions: [], currentSession: null,
   deferredInstall: null, exerciseDialogMode: 'session', exerciseDialogRoutineId: null,
-  editRoutineId: null, expandedSessionId: null, libraryQuery: '', libraryFilter: 'all'
+  editRoutineId: null, expandedSessionId: null, libraryQuery: '', libraryFilter: 'all',
+  swRegistration: null, waitingWorker: null, updateStatus: 'idle', updateMessage: '',
+  latestRelease: null, applyingUpdate: false, lastUpdateCheck: 0
 };
 const app = document.querySelector('#app');
 
@@ -177,6 +179,7 @@ function render() {
   if (state.view === 'history') renderHistory();
   if (state.view === 'library') renderLibrary();
   if (state.view === 'settings') renderSettings();
+  syncUpdateUI();
 }
 
 function routineStartCard(routine) {
@@ -327,11 +330,154 @@ function renderLibraryList() {
 
 function renderSettings() {
   const completed = state.sessions.filter(session => hardSets(session) > 0).length;
+  const updateAvailable = state.updateStatus === 'available';
+  const updateAction = updateAvailable ? 'apply-update' : 'check-update';
+  const updateButton = updateAvailable ? '업데이트' : state.updateStatus === 'checking' || state.updateStatus === 'downloading' ? '확인 중…' : '업데이트 확인';
+  const updateDisabled = ['checking', 'downloading', 'applying'].includes(state.updateStatus) ? 'disabled' : '';
   app.innerHTML = `<div class="section-head"><div><h2>설정</h2><p>데이터는 이 기기에 저장된다.</p></div></div>
     <div class="card setting-group"><h3>백업</h3><div class="setting-row"><div><b>JSON 백업 만들기</b><p>운동 · 루틴 · 세션 · 설정 전체 저장</p></div><button class="secondary-btn" data-action="export">내보내기</button></div><div class="setting-row"><div><b>백업 복원</b><p>구버전 데이터도 순서대로 변환 후 복원</p></div><button class="secondary-btn" data-action="import">가져오기</button></div></div>
+    <div class="card setting-group"><h3>업데이트</h3><div class="setting-row"><div><b>${esc(updateStatusTitle())}</b><p>${esc(updateStatusMessage())}</p></div><button class="${updateAvailable ? 'primary-btn' : 'secondary-btn'} compact-btn" data-action="${updateAction}" ${updateDisabled}>${updateButton}</button></div><div class="setting-row"><div><b>현재 앱 버전</b><p>릴리스 ${esc(RELEASE_ID)} · 기록은 업데이트 후에도 유지</p></div><span class="badge">v${esc(APP_VERSION)}</span></div></div>
     <div class="card setting-group"><h3>앱</h3><div class="setting-row"><div><b>아이폰 홈 화면</b><p>PWA로 설치해서 전체 화면 사용</p></div><button class="secondary-btn" data-action="install">설치 안내</button></div><div class="setting-row"><div><b>로컬 데이터</b><p>${state.exercises.length}개 운동 · ${state.routines.length}개 루틴 · ${completed}개 완료 세션</p></div><span class="badge">기기 전용</span></div><div class="setting-row"><div><b>데이터 schema</b><p>순차 migration 지원</p></div><span class="badge">v${DATA_SCHEMA_VERSION}</span></div></div>
     <div class="card setting-group"><h3>위험 구역</h3><div class="setting-row"><div><b>모든 기록 초기화</b><p>운동 세션만 삭제하고 운동과 루틴은 유지</p></div><button class="danger-btn" data-action="clear-sessions">초기화</button></div></div>
     <p class="muted small">PR+ v${APP_VERSION} · IndexedDB · Offline PWA</p>`;
+}
+
+function updateStatusTitle() {
+  if (state.updateStatus === 'checking') return '업데이트 확인 중';
+  if (state.updateStatus === 'downloading') return '새 버전 받는 중';
+  if (state.updateStatus === 'available') return state.latestRelease?.appVersion && state.latestRelease.appVersion !== APP_VERSION
+    ? `PR+ v${state.latestRelease.appVersion} 준비 완료` : '새 업데이트 준비 완료';
+  if (state.updateStatus === 'applying') return '업데이트 적용 중';
+  if (state.updateStatus === 'current') return '최신 버전 사용 중';
+  if (state.updateStatus === 'offline') return '오프라인 상태';
+  if (state.updateStatus === 'unsupported') return '자동 업데이트 미지원';
+  if (state.updateStatus === 'error') return '업데이트 확인 실패';
+  return '앱 업데이트';
+}
+function updateStatusMessage() {
+  if (state.updateMessage) return state.updateMessage;
+  if (state.updateStatus === 'available') return '버튼을 누르면 앱이 한 번 다시 열려. 저장된 기록은 유지돼.';
+  if (state.updateStatus === 'applying') return '새 파일로 전환하고 있어. 잠시만 기다려줘.';
+  if (state.updateStatus === 'current') return `PR+ v${APP_VERSION}이 최신 상태야.`;
+  if (state.updateStatus === 'checking') return '배포 사이트에서 최신 릴리스를 확인하고 있어.';
+  if (state.updateStatus === 'downloading') return '새 앱 파일을 안전하게 내려받고 있어.';
+  if (state.updateStatus === 'offline') return '인터넷에 연결한 뒤 다시 확인해줘.';
+  if (state.updateStatus === 'unsupported') return 'Safari에서 사이트를 다시 열어 최신 버전을 받아줘.';
+  if (state.updateStatus === 'error') return '잠시 뒤 사이트에 연결해서 다시 시도해줘.';
+  return '사이트에 배포된 새 버전이 있는지 확인할 수 있어.';
+}
+function syncUpdateUI() {
+  const versionButton = document.querySelector('#versionBtn');
+  const banner = document.querySelector('#updateBanner');
+  if (versionButton) {
+    versionButton.textContent = state.updateStatus === 'available' ? '업데이트' : `v${APP_VERSION}`;
+    versionButton.classList.toggle('has-update', state.updateStatus === 'available');
+    versionButton.setAttribute('aria-label', state.updateStatus === 'available' ? '새 업데이트 적용' : `PR+ v${APP_VERSION}, 업데이트 확인`);
+  }
+  if (!banner) return;
+  const available = state.updateStatus === 'available';
+  banner.classList.toggle('hidden', !available);
+  document.querySelector('#updateBannerTitle').textContent = updateStatusTitle();
+  document.querySelector('#updateBannerMessage').textContent = updateStatusMessage();
+}
+function setUpdateStatus(status, message = '') {
+  state.updateStatus = status;
+  state.updateMessage = message;
+  if (state.view === 'settings' && state.db) renderSettings();
+  syncUpdateUI();
+}
+function markUpdateAvailable(worker) {
+  if (!worker) return;
+  state.waitingWorker = worker;
+  setUpdateStatus('available');
+}
+
+function watchInstallingWorker(worker) {
+  if (!worker) return;
+  worker.addEventListener('statechange', () => {
+    if (worker.state === 'installed' && navigator.serviceWorker.controller) markUpdateAvailable(worker);
+  });
+}
+async function setupServiceWorker() {
+  if (!('serviceWorker' in navigator)) {
+    setUpdateStatus('unsupported');
+    return null;
+  }
+  try {
+    const registration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+    state.swRegistration = registration;
+    if (registration.waiting && navigator.serviceWorker.controller) markUpdateAvailable(registration.waiting);
+    registration.addEventListener('updatefound', () => {
+      if (navigator.serviceWorker.controller) setUpdateStatus('downloading');
+      watchInstallingWorker(registration.installing);
+    });
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!state.applyingUpdate) return;
+      state.applyingUpdate = false;
+      window.location.reload();
+    });
+    return registration;
+  } catch (error) {
+    console.error(error);
+    setUpdateStatus(navigator.onLine ? 'error' : 'offline');
+    return null;
+  }
+}
+async function checkForUpdate(notify = true) {
+  if (!('serviceWorker' in navigator)) {
+    setUpdateStatus('unsupported');
+    if (notify) toast(updateStatusMessage());
+    return;
+  }
+  if (state.updateStatus === 'available') {
+    if (notify) toast('새 업데이트가 준비되어 있어. 업데이트 버튼을 눌러줘.');
+    return;
+  }
+  setUpdateStatus('checking');
+  try {
+    const response = await fetch(`./version.json?check=${Date.now()}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`version.json ${response.status}`);
+    const release = await response.json();
+    if (!release.releaseId || !release.appVersion) throw new Error('버전 정보 형식이 올바르지 않아.');
+    state.latestRelease = release;
+    state.lastUpdateCheck = Date.now();
+    const registration = state.swRegistration || await setupServiceWorker();
+    if (!registration) return;
+    await registration.update();
+    if (registration.waiting && navigator.serviceWorker.controller) {
+      markUpdateAvailable(registration.waiting);
+      return;
+    }
+    if (release.releaseId !== RELEASE_ID) {
+      setUpdateStatus('downloading');
+      if (notify) toast('새 버전을 받고 있어. 준비되면 알려줄게.');
+      return;
+    }
+    setUpdateStatus('current');
+    if (notify) toast(`PR+ v${APP_VERSION}이 최신 버전이야.`);
+  } catch (error) {
+    console.error(error);
+    setUpdateStatus(navigator.onLine ? 'error' : 'offline');
+    if (notify) toast(updateStatusMessage());
+  }
+}
+async function applyUpdate() {
+  const worker = state.swRegistration?.waiting || state.waitingWorker;
+  if (!worker) {
+    toast('준비된 업데이트가 없어. 다시 확인할게.');
+    await checkForUpdate(false);
+    return;
+  }
+  try {
+    await saveCurrentSession();
+  } catch (error) {
+    console.error(error);
+    toast('현재 운동 기록 저장을 확인하지 못해서 업데이트를 멈췄어.');
+    return;
+  }
+  state.applyingUpdate = true;
+  setUpdateStatus('applying');
+  worker.postMessage({ type: 'SKIP_WAITING' });
 }
 
 async function ensureTodaySession() {
@@ -522,6 +668,8 @@ app.addEventListener('click', async event => {
   if (action === 'export') await exportBackup();
   if (action === 'import') document.querySelector('#importFile').click();
   if (action === 'install') showInstall();
+  if (action === 'check-update') await checkForUpdate(true);
+  if (action === 'apply-update') await applyUpdate();
   if (action === 'clear-sessions' && await confirmAsk('모든 기록 초기화', '운동 세션을 전부 삭제해. 이 작업은 되돌릴 수 없으니 먼저 백업하는 걸 권장해.')) {
     await clearStore(STORES.sessions); await refreshData(); render(); toast('운동 기록을 초기화했어.');
   }
@@ -554,6 +702,8 @@ document.querySelector('#createExerciseBtn').addEventListener('click', async () 
 });
 
 document.querySelector('#installBtn').addEventListener('click', showInstall);
+document.querySelector('#versionBtn').addEventListener('click', () => state.updateStatus === 'available' ? applyUpdate() : checkForUpdate(true));
+document.querySelector('#applyUpdateBtn').addEventListener('click', applyUpdate);
 document.querySelector('#closeInstallDialog').addEventListener('click', () => document.querySelector('#installDialog').close());
 document.querySelector('#importFile').addEventListener('change', event => { if (event.target.files[0]) importBackup(event.target.files[0]); event.target.value = ''; });
 window.addEventListener('beforeinstallprompt', event => {
@@ -562,7 +712,13 @@ window.addEventListener('beforeinstallprompt', event => {
   button.onclick = async () => { await state.deferredInstall.prompt(); state.deferredInstall = null; document.querySelector('#installDialog').close(); };
 });
 window.addEventListener('appinstalled', () => toast('PR+ 설치 완료.'));
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.error));
+window.addEventListener('load', async () => {
+  await setupServiceWorker();
+  await checkForUpdate(false);
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Date.now() - state.lastUpdateCheck > 30 * 60 * 1000) checkForUpdate(false);
+});
 
 (async function init() {
   try {

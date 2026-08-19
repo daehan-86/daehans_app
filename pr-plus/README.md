@@ -30,6 +30,7 @@ daehans_app/
 - Exercise / Routine / Session / 설정 JSON 전체 백업·복원
 - 기존 `OVERLOAD` 및 PR+ v2 백업의 순차 migration
 - Service Worker 오프라인 캐시
+- 앱 안의 현재 버전 표시, 새 릴리스 확인, 사용자 선택 업데이트
 - iPhone Home Screen Web App용 manifest / icon / 설치 안내
 
 ## PC에서 테스트
@@ -99,6 +100,16 @@ PR+의 manifest와 Service Worker는 상대경로와 `./` scope를 사용하므�
 5. **추가**
 
 이후 홈 화면의 `PR+` 아이콘으로 실행할 수 있습니다.
+
+## 앱 업데이트
+
+- 상단의 버전 버튼 또는 `설정 → 업데이트 확인`을 누르면 배포 사이트의 최신 릴리스를 확인합니다.
+- 새 버전 파일을 모두 받은 뒤에만 앱 상단에 `업데이트` 안내가 표시됩니다.
+- `업데이트`를 누르면 새 파일로 전환하면서 앱이 한 번 다시 열립니다. IndexedDB의 운동 기록은 삭제하지 않습니다.
+- 앱을 다시 설치할 필요는 없습니다. 인터넷에 연결된 상태에서 설치된 앱을 열거나 업데이트 확인을 누르면 됩니다.
+- 공개 앱 버전은 `appVersion`, 각 배포 식별자는 `releaseId`, 저장 데이터 구조는 `dataSchemaVersion`으로 서로 분리합니다.
+
+캐시되는 앱 파일을 변경해 배포할 때는 `data.mjs`, `version.json`, `sw.js`의 `releaseId`를 모두 같은 새 값으로 바꿔야 합니다. GitHub Actions가 이 규칙을 검사하며, 누락된 배포는 차단합니다.
 
 ## 백업
 

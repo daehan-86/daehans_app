@@ -30,6 +30,7 @@ jobs:
             pr-plus/data.mjs
             pr-plus/styles.css
             pr-plus/manifest.webmanifest
+            pr-plus/version.json
             pr-plus/sw.js
             pr-plus/icons/icon-192.png
             pr-plus/icons/icon-512.png
@@ -52,8 +53,22 @@ jobs:
       - name: Test data migrations and default routines
         run: node pr-plus/tests/migrations.mjs
 
-      - name: Check web app manifest
-        run: python3 -m json.tool pr-plus/manifest.webmanifest > /dev/null
+      - name: Check web app metadata
+        run: |
+          python3 -m json.tool pr-plus/manifest.webmanifest > /dev/null
+          python3 -m json.tool pr-plus/version.json > /dev/null
+
+      - name: Check release metadata consistency
+        shell: bash
+        run: |
+          app_version="$(python3 -c 'import json; print(json.load(open("pr-plus/version.json"))["appVersion"])')"
+          release_id="$(python3 -c 'import json; print(json.load(open("pr-plus/version.json"))["releaseId"])')"
+          schema_version="$(python3 -c 'import json; print(json.load(open("pr-plus/version.json"))["dataSchemaVersion"])')"
+          grep -Fq "APP_VERSION = '$app_version';" pr-plus/data.mjs
+          grep -Fq "DATA_SCHEMA_VERSION = $schema_version;" pr-plus/data.mjs
+          for file in pr-plus/data.mjs pr-plus/sw.js; do
+            grep -Fq "RELEASE_ID = '$release_id';" "$file"
+          done
 
       - name: Require a new Service Worker cache version
         if: github.event_name != 'workflow_dispatch'
@@ -66,27 +81,27 @@ jobs:
           fi
 
           changed_files="$(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")"
-          if ! grep -Eq '^pr-plus/(index\.html|app\.js|data\.mjs|styles\.css|manifest\.webmanifest|icons/)' <<< "$changed_files"; then
+          if ! grep -Eq '^pr-plus/(index\.html|app\.js|data\.mjs|styles\.css|manifest\.webmanifest|version\.json|sw\.js|icons/)' <<< "$changed_files"; then
             exit 0
           fi
 
-          if ! grep -qx 'pr-plus/sw.js' <<< "$changed_files"; then
-            echo 'Cached PR+ files changed, but pr-plus/sw.js was not updated.'
-            echo 'Bump the CACHE version in pr-plus/sw.js before deployment.'
+          if ! grep -qx 'pr-plus/sw.js' <<< "$changed_files" || ! grep -qx 'pr-plus/version.json' <<< "$changed_files"; then
+            echo 'Cached PR+ files changed, but sw.js and version.json were not both updated.'
+            echo 'Use a new releaseId in data.mjs, version.json, and sw.js before deployment.'
             exit 1
           fi
 
-          previous_cache="$(git show "$BASE_SHA:pr-plus/sw.js" 2>/dev/null | sed -n "s/^const CACHE = ['\"]\([^'\"]*\)['\"];$/\1/p" || true)"
-          current_cache="$(sed -n "s/^const CACHE = ['\"]\([^'\"]*\)['\"];$/\1/p" pr-plus/sw.js)"
+          previous_release="$(git show "$BASE_SHA:pr-plus/version.json" 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["releaseId"])' 2>/dev/null || true)"
+          current_release="$(python3 -c 'import json; print(json.load(open("pr-plus/version.json"))["releaseId"])')"
 
-          if [ -z "$current_cache" ]; then
-            echo 'Could not read the CACHE version from pr-plus/sw.js.'
+          if [ -z "$current_release" ]; then
+            echo 'Could not read releaseId from pr-plus/version.json.'
             exit 1
           fi
 
-          if [ -n "$previous_cache" ] && [ "$previous_cache" = "$current_cache" ]; then
-            echo "Service Worker CACHE version is still $current_cache."
-            echo 'Use a new cache version so installed PWAs receive the update.'
+          if [ -n "$previous_release" ] && [ "$previous_release" = "$current_release" ]; then
+            echo "PR+ releaseId is still $current_release."
+            echo 'Use a new releaseId so installed PWAs can detect and receive the update.'
             exit 1
           fi
 
@@ -108,7 +123,7 @@ jobs:
             sleep 1
           done
 
-          for asset in app.js data.mjs styles.css manifest.webmanifest sw.js; do
+          for asset in app.js data.mjs styles.css manifest.webmanifest version.json sw.js; do
             curl --fail --silent "http://127.0.0.1:8080/pr-plus/$asset" > /dev/null
           done
 
