@@ -19,13 +19,16 @@ daehans_app/
 ```
 
 ## 기능
-- 운동 종목 추가 / 직접 생성
+- 29개 기본 Exercise Library와 영문 canonical name / 한글 표시명
+- Chest / Back / Shoulders / Legs 기본 4분할 루틴
+- 루틴 운동 추가·제거·순서·세트 수·반복 범위 편집
+- 루틴으로 오늘 세션 생성 (추천 중량 없이 baseline 기록)
+- 운동 종목 검색·부위 필터·직접 생성
 - 세트별 중량(kg), 반복수, RIR, 완료 체크
 - 이전 운동 기록 표시 및 복사
-- Double Progression 기반 다음 운동 목표 제안
 - 총 볼륨, 주간 hard set, e1RM(Epley) 통계
-- JSON 전체 백업 / 복원
-- 기존 `OVERLOAD` 백업 JSON도 복원 가능
+- Exercise / Routine / Session / 설정 JSON 전체 백업·복원
+- 기존 `OVERLOAD` 및 PR+ v2 백업의 순차 migration
 - Service Worker 오프라인 캐시
 - iPhone Home Screen Web App용 manifest / icon / 설치 안내
 
@@ -69,10 +72,9 @@ git push origin main
 저장소에서:
 
 1. **Settings → Pages**
-2. **Build and deployment → Source → Deploy from a branch**
-3. Branch: `main`
-4. Folder: `/(root)`
-5. Save
+2. **Build and deployment → Source → GitHub Actions**
+3. 기능 브랜치의 검사를 통과시킨 뒤 `main`으로 병합
+4. `Validate and deploy GitHub Pages` workflow 완료 확인
 
 그 뒤 저장소의 Pages 주소가 다음과 같다면:
 
@@ -110,3 +112,9 @@ PR+의 manifest와 Service Worker는 상대경로와 `./` scope를 사용하므�
 ## 내부 데이터 호환성
 
 브랜드명은 `PR+`로 변경했지만 IndexedDB 이름은 기존 `overload-db`를 유지합니다. 같은 배포 URL에서 기존 앱을 PR+로 업데이트할 때 이미 저장된 운동 기록을 그대로 유지하기 위한 선택입니다.
+
+PR+ v0.1의 IndexedDB 버전은 `2`, 백업/저장 데이터 schema는 `3`입니다. 기존 데이터는 `v1 → v2 → v3` 인접 migration을 순서대로 거치며, 변환이 완료되기 전에는 기존 데이터를 삭제하지 않습니다. 상세 규칙은 [`MIGRATIONS.md`](./MIGRATIONS.md)를 참고하세요.
+
+## v0.1 Baseline 정책
+
+루틴에는 목표 세트 수와 반복 범위만 저장합니다. 시작 중량이나 weight increment는 임의로 넣지 않습니다. 실제 세션에서 입력한 중량·반복수·RIR·완료 여부가 이후 Progressive Overload 기능의 baseline이 됩니다.

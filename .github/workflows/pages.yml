@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Check required PWA files
         shell: bash
@@ -25,6 +27,7 @@ jobs:
           required_files=(
             pr-plus/index.html
             pr-plus/app.js
+            pr-plus/data.mjs
             pr-plus/styles.css
             pr-plus/manifest.webmanifest
             pr-plus/sw.js
@@ -42,11 +45,50 @@ jobs:
 
       - name: Check JavaScript syntax
         run: |
-          node --check pr-plus/app.js
+          node --input-type=module --check < pr-plus/app.js
+          node --check pr-plus/data.mjs
           node --check pr-plus/sw.js
+
+      - name: Test data migrations and default routines
+        run: node pr-plus/tests/migrations.mjs
 
       - name: Check web app manifest
         run: python3 -m json.tool pr-plus/manifest.webmanifest > /dev/null
+
+      - name: Require a new Service Worker cache version
+        if: github.event_name != 'workflow_dispatch'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")"
+          if ! grep -Eq '^pr-plus/(index\.html|app\.js|data\.mjs|styles\.css|manifest\.webmanifest|icons/)' <<< "$changed_files"; then
+            exit 0
+          fi
+
+          if ! grep -qx 'pr-plus/sw.js' <<< "$changed_files"; then
+            echo 'Cached PR+ files changed, but pr-plus/sw.js was not updated.'
+            echo 'Bump the CACHE version in pr-plus/sw.js before deployment.'
+            exit 1
+          fi
+
+          previous_cache="$(git show "$BASE_SHA:pr-plus/sw.js" 2>/dev/null | sed -n "s/^const CACHE = ['\"]\([^'\"]*\)['\"];$/\1/p" || true)"
+          current_cache="$(sed -n "s/^const CACHE = ['\"]\([^'\"]*\)['\"];$/\1/p" pr-plus/sw.js)"
+
+          if [ -z "$current_cache" ]; then
+            echo 'Could not read the CACHE version from pr-plus/sw.js.'
+            exit 1
+          fi
+
+          if [ -n "$previous_cache" ] && [ "$previous_cache" = "$current_cache" ]; then
+            echo "Service Worker CACHE version is still $current_cache."
+            echo 'Use a new cache version so installed PWAs receive the update.'
+            exit 1
+          fi
 
       - name: Smoke-test static routes
         shell: bash
@@ -66,7 +108,7 @@ jobs:
             sleep 1
           done
 
-          for asset in app.js styles.css manifest.webmanifest sw.js; do
+          for asset in app.js data.mjs styles.css manifest.webmanifest sw.js; do
             curl --fail --silent "http://127.0.0.1:8080/pr-plus/$asset" > /dev/null
           done
 
