@@ -1,6 +1,7 @@
-export const APP_VERSION = '0.2.0';
-export const RELEASE_ID = '0.2.0-r1';
+export const APP_VERSION = '0.2.1';
+export const RELEASE_ID = '0.2.1-r1';
 export const DATA_SCHEMA_VERSION = 4;
+export const TRAINING_DAY_START_HOUR = 7;
 export const DB_NAME = 'overload-db';
 export const DB_VERSION = 2;
 export const STORES = {
@@ -150,8 +151,35 @@ const asArray = value => Array.isArray(value) ? value : [];
 const finiteNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const optionalPositiveNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) <= 0 ? null : Number(value);
 
+export function localDateKey(value = new Date()) {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error('유효한 날짜가 아니야.');
+  const pad = number => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+export function trainingDayKey(value = new Date(), startHour = TRAINING_DAY_START_HOUR) {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error('유효한 날짜가 아니야.');
+  if (date.getHours() < startHour) date.setDate(date.getDate() - 1);
+  return localDateKey(date);
+}
+
+export function nextTrainingDayBoundary(value = new Date(), startHour = TRAINING_DAY_START_HOUR) {
+  const now = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(now.getTime())) throw new Error('유효한 날짜가 아니야.');
+  const boundary = new Date(now.getTime());
+  boundary.setHours(startHour, 0, 0, 0);
+  if (boundary <= now) boundary.setDate(boundary.getDate() + 1);
+  return boundary;
+}
+
 export function muscleLabel(muscleGroup) {
   return MUSCLE_LABELS[muscleGroup] || muscleGroup || MUSCLE_LABELS.other;
+}
+
+export function defaultRoutineIdForMuscle(muscleGroup) {
+  return ({ chest: 'routine-chest', triceps: 'routine-chest', back: 'routine-back', biceps: 'routine-back', shoulders: 'routine-shoulders', legs: 'routine-legs' })[muscleGroup] || null;
 }
 
 export function normalizeMuscleGroup(value) {

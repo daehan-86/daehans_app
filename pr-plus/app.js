@@ -1,7 +1,8 @@
 import {
   APP_VERSION, RELEASE_ID, DATA_SCHEMA_VERSION, DB_NAME, DB_VERSION, STORES, DEFAULT_EXERCISES,
-  createDefaultRoutines, findDefaultExercise, migrateBackupToLatest, muscleLabel,
-  normalizeExercise, normalizeRoutine, normalizeSession
+  createDefaultRoutines, defaultRoutineIdForMuscle, findDefaultExercise, migrateBackupToLatest, muscleLabel,
+  nextTrainingDayBoundary, localDateKey, normalizeExercise, normalizeRoutine, normalizeSession,
+  trainingDayKey
 } from './data.mjs';
 import {
   buildNextTarget, compareExerciseLogs, completedSets, detectPersonalRecords,
@@ -15,7 +16,8 @@ const state = {
   swRegistration: null, waitingWorker: null, updateStatus: 'idle', updateMessage: '',
   latestRelease: null, applyingUpdate: false, lastUpdateCheck: 0,
   detailExerciseId: null, restTimerEnd: 0, restTimerInterval: null,
-  durationTimer: null, durationTimerInterval: null
+  durationTimer: null, durationTimerInterval: null, activeTrainingDay: null,
+  trainingDayTimer: null, historyLimit: 31, editingSession: null, editingSessionIsNew: false
 };
 const app = document.querySelector('#app');
 
@@ -56,6 +58,13 @@ function put(store, value) {
     request.onerror = () => reject(request.error);
   });
 }
+function deleteRecord(store, key) {
+  return new Promise((resolve, reject) => {
+    const request = objectStore(store, 'readwrite').delete(key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
 function clearStore(store) {
   return new Promise((resolve, reject) => {
     const request = objectStore(store, 'readwrite').clear();
@@ -88,7 +97,7 @@ async function replaceAllData(data) {
   await transactionComplete(transaction);
 }
 
-const todayKey = () => new Date().toLocaleDateString('en-CA');
+const todayKey = () => trainingDayKey(new Date());
 const uid = prefix => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -96,6 +105,10 @@ const esc = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const formatKg = value => Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
 const dayKo = date => ['일', '월', '화', '수', '목', '금', '토'][new Date(`${date}T12:00:00`).getDay()];
+const dateFromKey = key => new Date(`${key}T12:00:00`);
+const shiftDateKey = (key, days) => {
+  const date = dateFromKey(key); date.setDate(date.getDate() + days); return localDateKey(date);
+};
 const exerciseById = id => state.exercises.find(exercise => exercise.id === id);
 const routineById = id => state.routines.find(routine => routine.id === id);
 
@@ -151,6 +164,32 @@ async function refreshData() {
   state.sessions = sessions.map(normalizeSession).sort((a, b) => b.date.localeCompare(a.date) || num(b.updatedAt) - num(a.updatedAt));
   state.settings = settings;
   state.currentSession = state.sessions.find(session => session.date === todayKey()) || null;
+}
+
+async function synchronizeTrainingDay(notify = false) {
+  const nextDay = todayKey();
+  if (!state.activeTrainingDay) { state.activeTrainingDay = nextDay; return false; }
+  if (state.activeTrainingDay === nextDay) return false;
+  if (state.durationTimer && state.currentSession) {
+    const { exerciseIndex, setIndex, startedAt } = state.durationTimer;
+    const set = state.currentSession.exercises[exerciseIndex]?.sets[setIndex];
+    if (set) { set.duration = Math.max(1, Math.floor((Date.now() - startedAt) / 1000)); set.done = true; }
+    clearInterval(state.durationTimerInterval); state.durationTimerInterval = null; state.durationTimer = null;
+    await saveCurrentSession();
+  }
+  state.activeTrainingDay = nextDay;
+  await refreshData(); render();
+  if (notify) toast('오전 7시가 지나 새 운동일로 갱신했어. 이전 기록은 전날에 저장됐어.');
+  return true;
+}
+
+function scheduleTrainingDayRefresh() {
+  clearTimeout(state.trainingDayTimer);
+  const delay = Math.max(250, nextTrainingDayBoundary(new Date()).getTime() - Date.now() + 50);
+  state.trainingDayTimer = setTimeout(async () => {
+    try { await synchronizeTrainingDay(true); } catch (error) { console.error(error); }
+    scheduleTrainingDayRefresh();
+  }, Math.min(delay, 2_147_000_000));
 }
 
 function settingValue(key, fallback) {
@@ -235,11 +274,11 @@ function routineStartCard(routine) {
 
 function renderToday() {
   const session = state.currentSession;
-  const date = new Date();
+  const date = dateFromKey(todayKey());
   const dateLabel = `${date.getMonth() + 1}월 ${date.getDate()}일 ${['일', '월', '화', '수', '목', '금', '토'][date.getDay()]}요일`;
-  let html = `<div class="section-head"><div><h2>오늘의 훈련</h2><p>이번 기록이 다음 발전의 기준이 된다.</p></div><div class="date-chip">${dateLabel}</div></div>`;
+  let html = `<div class="section-head"><div><h2>오늘의 훈련</h2><p>운동일은 오전 7시에 바뀐다.</p></div><div class="date-chip">${dateLabel}</div></div>`;
   if (!session || !session.exercises.length) {
-    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.2 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
+    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.2.1 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
     html += `<div class="routine-start-grid">${state.routines.map(routineStartCard).join('')}</div>`;
     html += `<button class="secondary-btn wide manual-start" data-action="add-exercise">루틴 없이 운동 추가</button>`;
   } else {
@@ -354,9 +393,27 @@ function routineCard(routine) {
 }
 
 function renderHistory() {
-  const sessions = state.sessions.filter(session => session.exercises?.some(log => log.sets.some(set => set.done)));
-  app.innerHTML = `<div class="section-head"><div><h2>운동 기록</h2><p>${sessions.length}개의 훈련 세션</p></div></div>` +
-    (sessions.length ? `<div class="card history-card">${sessions.map(historyItem).join('')}</div>` : '<div class="card empty-state"><h3>아직 기록이 없어</h3><p>첫 운동을 완료하면 여기에 쌓인다.</p></div>') + progressMarkup();
+  const timeline = historyTimeline();
+  const visible = timeline.slice(0, state.historyLimit);
+  const trainingDays = timeline.filter(item => item.session?.exercises?.some(log => completedSets(log).length)).length;
+  const restDays = timeline.filter(item => !item.session).length;
+  app.innerHTML = `<div class="section-head"><div><h2>운동 기록</h2><p>${trainingDays}일 훈련 · ${restDays}일 휴식</p></div></div>` +
+    progressMarkup() +
+    `<div class="subsection-head"><h3>전체 기록</h3><p>첫 기록부터 오늘까지, 미등록일은 휴식으로 표시해.</p></div>` +
+    (timeline.length ? `<div class="card history-card">${visible.map(item => item.session ? historyItem(item.session) : restDayItem(item.date)).join('')}</div>${visible.length < timeline.length ? `<button class="secondary-btn wide history-more" data-action="load-more-history">이전 기록 더 보기 (${timeline.length - visible.length}일)</button>` : '<p class="history-end muted small">첫 기록까지 모두 불러왔어.</p>'}` : '<div class="card empty-state"><h3>아직 기록이 없어</h3><p>첫 운동을 시작하면 이후 미기록일이 휴식으로 정리돼.</p></div>');
+}
+function historyTimeline() {
+  const validSessions = state.sessions.filter(session => /^\d{4}-\d{2}-\d{2}$/.test(session.date) && session.date <= todayKey());
+  if (!validSessions.length) return [];
+  const byDate = new Map(validSessions.map(session => [session.date, session]));
+  const firstDate = validSessions.reduce((earliest, session) => session.date < earliest ? session.date : earliest, validSessions[0].date);
+  const entries = [];
+  for (let date = todayKey(); date >= firstDate; date = shiftDateKey(date, -1)) entries.push({ date, session: byDate.get(date) || null });
+  return entries;
+}
+function restDayItem(dateKey) {
+  const date = dateFromKey(dateKey);
+  return `<div class="history-entry rest-entry"><div class="history-item"><span class="history-date"><b>${date.getDate()}</b><span>${date.getMonth() + 1}월 · ${dayKo(dateKey)}</span></span><span class="history-main"><strong>휴식</strong><small>등록된 운동 없음</small></span><button class="ghost-btn compact-btn" data-action="add-past-session" data-date="${esc(dateKey)}">기록 추가</button></div></div>`;
 }
 function historyItem(session) {
   const date = new Date(`${session.date}T12:00:00`);
@@ -367,8 +424,72 @@ function historyItem(session) {
     const exercise = exerciseById(log.exerciseId) || log;
     const sets = completedSets(log).map(set => formatCompletedSet(set, { ...exercise, ...log })).join(' · ');
     return `<button class="history-exercise" data-action="exercise-detail" data-exercise-id="${esc(log.exerciseId)}"><b>${esc(exerciseNameFromLog(log))}</b><span>${esc(sets)}</span></button>`;
-  }).join('')}${session.notes ? `<p class="history-note">${esc(session.notes)}</p>` : ''}</div>` : '';
-  return `<div class="history-entry"><button class="history-item" data-action="toggle-history" data-session-id="${esc(session.id)}"><span class="history-date"><b>${date.getDate()}</b><span>${date.getMonth() + 1}월 · ${dayKo(session.date)}</span></span><span class="history-main"><strong>${esc(session.routineName || names || '운동')}</strong><small>${hardSets(session)}세트 · ${Math.round(sessionVolume(session)).toLocaleString()}kg</small></span><span class="badge">${session.finishedAt ? '완료' : '기록'}</span></button>${detail}</div>`;
+  }).join('') || '<p class="muted small">완료 체크된 세트가 아직 없어.</p>'}${session.notes ? `<p class="history-note">${esc(session.notes)}</p>` : ''}<button class="secondary-btn compact-btn history-edit-btn" data-action="edit-session" data-session-id="${esc(session.id)}">이 기록 편집</button></div>` : '';
+  return `<div class="history-entry"><button class="history-item" data-action="toggle-history" data-session-id="${esc(session.id)}"><span class="history-date"><b>${date.getDate()}</b><span>${date.getMonth() + 1}월 · ${dayKo(session.date)}</span></span><span class="history-main"><strong>${esc(session.routineName || names || '개별 운동')}</strong><small>${hardSets(session)}세트 · ${Math.round(sessionVolume(session)).toLocaleString()}kg</small></span><span class="badge">${session.finishedAt ? '완료' : '기록'}</span></button>${detail}</div>`;
+}
+
+function showSessionEditor(session, isNew = false) {
+  state.editingSession = JSON.parse(JSON.stringify(session)); state.editingSessionIsNew = isNew;
+  renderSessionEditor();
+  const dialog = document.querySelector('#sessionEditDialog'); if (!dialog.open) dialog.showModal();
+}
+function showExistingSessionEditor(sessionId) {
+  const session = state.sessions.find(candidate => candidate.id === sessionId);
+  if (!session) return toast('기록을 찾을 수 없어.');
+  showSessionEditor(session, false);
+}
+function showNewSessionEditor(date) {
+  if (state.sessions.some(session => session.date === date)) return toast('이 날짜에는 이미 기록이 있어.');
+  const now = Date.now();
+  showSessionEditor({ id: uid(`session-${date}`), date, routineName: '', exercises: [], notes: '', createdAt: now, startedAt: now, updatedAt: now, finishedAt: now }, true);
+}
+function editSetMarkup(set, log, exerciseIndex, setIndex) {
+  const exercise = exerciseById(log.exerciseId) || log; const config = { ...exercise, ...log };
+  const weight = config.loadMode !== 'none' ? `<label>${loadHeader(config)}<input class="set-input" type="number" step="0.25" inputmode="decimal" data-edit-set-field="weight" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.weight)}"></label>` : '';
+  const metric = isDuration(config)
+    ? `<label>초<input class="set-input" type="number" min="0" inputmode="numeric" data-edit-set-field="duration" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.duration)}"></label>`
+    : `<label>횟수<input class="set-input" type="number" min="0" inputmode="numeric" data-edit-set-field="reps" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.reps)}"></label><label>RIR<input class="set-input" type="number" min="0" max="10" inputmode="numeric" data-edit-set-field="rir" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.rir)}"></label>`;
+  return `<div class="edit-set-row"><b>${setIndex + 1}</b>${weight}${metric}<label class="edit-done">완료<input type="checkbox" data-edit-set-field="done" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" ${set.done ? 'checked' : ''}></label><button class="remove-item-btn" data-edit-action="remove-set" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" aria-label="세트 삭제">×</button></div>`;
+}
+function renderSessionEditor() {
+  const session = state.editingSession; if (!session) return;
+  document.querySelector('#sessionEditTitle').textContent = state.editingSessionIsNew ? '과거 기록 추가' : '기록 편집';
+  const logs = session.exercises.map((log, exerciseIndex) => {
+    const exercise = exerciseById(log.exerciseId) || log;
+    return `<section class="edit-log"><div class="edit-log-head"><div><b>${esc(exerciseNameFromLog(log))}</b><small>${esc(exerciseSubtitle(exercise))} · ${isDuration({ ...exercise, ...log }) ? '시간' : '횟수'} 기록</small></div><button class="ghost-btn compact-btn" data-edit-action="remove-log" data-eidx="${exerciseIndex}">운동 삭제</button></div><div class="edit-sets">${log.sets.map((set, setIndex) => editSetMarkup(set, log, exerciseIndex, setIndex)).join('')}</div><button class="secondary-btn compact-btn" data-edit-action="add-set" data-eidx="${exerciseIndex}">＋ 세트 추가</button></section>`;
+  }).join('');
+  document.querySelector('#sessionEditContent').innerHTML = `<div class="form-grid session-edit-meta"><label>운동 날짜 (오전 7시 기준)<input id="editSessionDate" class="text-input" type="date" max="${todayKey()}" value="${esc(session.date)}"></label><label>루틴 / 기록 이름<input id="editSessionName" class="text-input" value="${esc(session.routineName || '')}" placeholder="예: Back 또는 새벽 운동"></label></div>
+    <div class="edit-log-list">${logs || '<div class="card empty-state compact-empty"><h3>운동을 추가해줘</h3><p>운동과 실제 수행 세트를 입력할 수 있어.</p></div>'}</div>
+    <button class="secondary-btn wide edit-add-exercise" data-edit-action="add-exercise">＋ 운동 추가</button>
+    <label class="session-note"><span>메모</span><textarea id="editSessionNotes" class="text-input" placeholder="컨디션, 자세, 통증 없이 느낀 점…">${esc(session.notes || '')}</textarea></label>
+    <div class="session-edit-actions">${state.editingSessionIsNew ? '' : '<button class="danger-btn" data-edit-action="delete-session">기록 삭제</button>'}<button class="primary-btn" data-edit-action="save-session">저장</button></div>`;
+}
+function addExerciseToEditingSession(exerciseId) {
+  const session = state.editingSession; const exercise = exerciseById(exerciseId);
+  if (!session || !exercise) return toast('운동을 찾을 수 없어.');
+  if (session.exercises.some(log => log.exerciseId === exerciseId)) return toast('이미 이 기록에 있는 운동이야.');
+  session.exercises.push(createSessionLog(exercise, { targetSets: exercise.type === 'warmup' ? 1 : 3, type: exercise.type }));
+  renderSessionEditor();
+  const dialog = document.querySelector('#sessionEditDialog'); if (!dialog.open) dialog.showModal();
+}
+async function saveEditedSession() {
+  const session = state.editingSession; if (!session) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(session.date) || session.date > todayKey()) return toast('오늘 운동일보다 미래 날짜는 저장할 수 없어.');
+  if (!session.exercises.length) return toast('운동을 하나 이상 추가해줘.');
+  if (state.sessions.some(candidate => candidate.id !== session.id && candidate.date === session.date)) return toast('이 날짜에는 이미 다른 기록이 있어.');
+  session.updatedAt = Date.now();
+  if (!session.createdAt) session.createdAt = session.updatedAt;
+  session.finishedAt = session.exercises.some(log => completedSets(log).length) ? session.finishedAt || Date.now() : null;
+  await put(STORES.sessions, normalizeSession(session));
+  document.querySelector('#sessionEditDialog').close(); state.editingSession = null;
+  await refreshData(); renderHistory(); toast('운동 기록을 저장했어.');
+}
+async function deleteEditedSession() {
+  const session = state.editingSession; if (!session || state.editingSessionIsNew) return;
+  if (!await confirmAsk('이 기록 삭제', `${session.date} 운동 기록을 삭제할까? 백업이 없으면 되돌릴 수 없어.`)) return;
+  await deleteRecord(STORES.sessions, session.id);
+  document.querySelector('#sessionEditDialog').close(); state.editingSession = null;
+  await refreshData(); renderHistory(); toast('기록을 삭제했어. 백업이 없으면 복구할 수 없어.');
 }
 function lineChartMarkup(values, suffix = '') {
   if (!values.length) return '<p class="muted small">표시할 기록이 없어.</p>';
@@ -384,14 +505,13 @@ function lineChartMarkup(values, suffix = '') {
 function progressMarkup() {
   const completed = state.sessions.filter(session => session.exercises?.some(log => completedSets(log).length));
   const last7 = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(); date.setDate(date.getDate() - (6 - index));
-    const key = date.toLocaleDateString('en-CA');
+    const key = shiftDateKey(todayKey(), -(6 - index)); const date = dateFromKey(key);
     return { label: ['일', '월', '화', '수', '목', '금', '토'][date.getDay()], volume: completed.filter(session => session.date === key).reduce((sum, session) => sum + sessionVolume(session), 0) };
   });
   const maxVolume = Math.max(1, ...last7.map(item => item.volume));
   const muscleSets = {};
   const muscleVolumes = {};
-  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 6);
+  const cutoff = dateFromKey(shiftDateKey(todayKey(), -6));
   completed.filter(session => new Date(`${session.date}T12:00:00`) >= cutoff).forEach(session => session.exercises.forEach(log => {
     const exercise = exerciseById(log.exerciseId);
     if (exercise && !isWarmupLog(log)) {
@@ -400,16 +520,46 @@ function progressMarkup() {
     }
   }));
   const topExercises = state.exercises.map(exercise => ({ exercise, e1rm: bestE1RMForExercise(exercise.id) })).filter(item => item.e1rm > 0).sort((a, b) => b.e1rm - a.e1rm).slice(0, 5);
-  const cutoff28 = new Date(); cutoff28.setDate(cutoff28.getDate() - 27);
+  const cutoff28 = dateFromKey(shiftDateKey(todayKey(), -27));
   const last28 = completed.filter(session => new Date(`${session.date}T12:00:00`) >= cutoff28);
   const bodyWeights = [...settingValue('bodyWeightEntries', [])].sort((a, b) => a.date.localeCompare(b.date)).slice(-12);
   const todayWeight = bodyWeights.find(entry => entry.date === todayKey())?.weight || '';
-  return `<div class="subsection-head"><h3>최근 성장 지표</h3><p>Baseline 기록이 쌓이면 변화가 보이기 시작해.</p></div>
+  const weeks = weeklyTrend(completed, 8);
+  const current28 = periodTotals(completed, shiftDateKey(todayKey(), -27), todayKey());
+  const previous28 = periodTotals(completed, shiftDateKey(todayKey(), -55), shiftDateKey(todayKey(), -28));
+  return `<div class="subsection-head"><h3>전체 성장 추세</h3><p>최근 8주 흐름과 직전 4주 대비 변화를 보여줘.</p></div>
+    <div class="growth-grid">${growthMetric('훈련일', current28.days, previous28.days, '일')}${growthMetric('Hard sets', current28.sets, previous28.sets, '세트')}${growthMetric('볼륨', Math.round(current28.volume), Math.round(previous28.volume), 'kg')}</div>
+    ${weeklyTrendCard('WEEKLY VOLUME', weeks, 'volume', 'kg')}${weeklyTrendCard('WEEKLY HARD SETS', weeks, 'sets', '세트')}${weeklyTrendCard('WEEKLY TRAINING DAYS', weeks, 'days', '일')}
     <div class="stats-grid"><div class="stat-card"><span>최근 28일 훈련</span><b>${last28.length}<small>회</small></b></div><div class="stat-card"><span>주간 평균 빈도</span><b>${formatKg(last28.length / 4)}<small>회</small></b></div></div>
     <div class="card"><p class="eyebrow">LAST 7 DAYS · VOLUME</p><div class="chart">${last7.map(item => `<div class="chart-col"><div class="chart-bar-wrap"><div class="chart-bar" style="height:${Math.max(2, item.volume / maxVolume * 100)}%"></div></div><div class="chart-label">${item.label}</div></div>`).join('')}</div></div>
     <div class="card"><p class="eyebrow">WEEKLY HARD SETS · MUSCLE VOLUME</p>${Object.keys(muscleSets).length ? Object.entries(muscleSets).sort((a, b) => b[1] - a[1]).map(([muscle, value]) => `<div class="progress-row"><div class="progress-row-head"><span>${esc(muscleLabel(muscle))}</span><b>${value}세트 · ${Math.round(muscleVolumes[muscle] || 0).toLocaleString()}kg</b></div><div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, value / 14 * 100)}%"></div></div></div>`).join('') : '<p class="muted small">최근 7일 완료 세트가 없어.</p>'}</div>
     <div class="card"><p class="eyebrow">ESTIMATED 1RM</p>${topExercises.length ? topExercises.map(item => `<button class="metric-row" data-action="exercise-detail" data-exercise-id="${esc(item.exercise.id)}"><span><b>${esc(item.exercise.name)}</b><small>최고 세트 기반 Epley 추정</small></span><strong>${formatKg(item.e1rm)} kg</strong></button>`).join('') : '<p class="muted small">운동 기록을 입력하면 표시된다.</p>'}</div>
     <div class="card body-weight-card"><div class="body-weight-head"><div><p class="eyebrow">BODY WEIGHT</p><h3>체중 변화</h3></div><div class="body-weight-input"><input id="bodyWeightInput" class="set-input" inputmode="decimal" value="${esc(todayWeight)}" placeholder="kg"><button class="secondary-btn compact-btn" data-action="save-body-weight">저장</button></div></div>${lineChartMarkup(bodyWeights.map(entry => num(entry.weight)), 'kg')}</div>`;
+}
+
+function periodTotals(sessions, from, to) {
+  const period = sessions.filter(session => session.date >= from && session.date <= to);
+  return { days: new Set(period.map(session => session.date)).size, sets: period.reduce((sum, session) => sum + hardSets(session), 0), volume: period.reduce((sum, session) => sum + sessionVolume(session), 0) };
+}
+function weeklyTrend(sessions, count) {
+  const today = dateFromKey(todayKey()); const mondayOffset = (today.getDay() + 6) % 7;
+  today.setDate(today.getDate() - mondayOffset);
+  return Array.from({ length: count }, (_, index) => {
+    const start = new Date(today); start.setDate(start.getDate() - (count - 1 - index) * 7);
+    const startKey = localDateKey(start); const end = new Date(start); end.setDate(end.getDate() + 6); const endKey = localDateKey(end);
+    const totals = periodTotals(sessions, startKey, endKey);
+    return { ...totals, label: `${start.getMonth() + 1}/${start.getDate()}` };
+  });
+}
+function growthMetric(label, current, previous, suffix) {
+  const change = previous > 0 ? Math.round((current - previous) / previous * 100) : current > 0 ? null : 0;
+  const changeText = change === null ? '새 기록' : `${change > 0 ? '+' : ''}${change}%`;
+  const tone = change === null || change > 0 ? 'up' : change < 0 ? 'down' : 'flat';
+  return `<div class="growth-card"><span>${label}</span><b>${Number(current).toLocaleString()}<small>${suffix}</small></b><em class="${tone}">${changeText}</em><small>직전 4주 대비</small></div>`;
+}
+function weeklyTrendCard(title, weeks, field, suffix) {
+  const values = weeks.map(week => num(week[field])); const latest = values.at(-1) || 0;
+  return `<div class="card trend-card"><div class="trend-head"><p class="eyebrow">${title}</p><b>${formatKg(latest)} ${suffix}</b></div>${lineChartMarkup(values, suffix)}<div class="chart-range"><span>${weeks[0]?.label || ''}</span><span>${weeks.at(-1)?.label || ''}</span></div></div>`;
 }
 
 function renderLibrary() {
@@ -429,7 +579,18 @@ function renderLibraryList() {
       (state.libraryFilter === 'other' && ['core', 'other'].includes(exercise.muscleGroup));
     return filterMatch && (!query || exerciseSearchText(exercise).includes(query));
   }).sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name, 'en'));
-  list.innerHTML = filtered.length ? filtered.map(exercise => `<article class="library-item"><div class="library-item-main"><div class="library-title-row"><button class="favorite-btn ${exercise.favorite ? 'active' : ''}" data-action="toggle-favorite" data-exercise-id="${esc(exercise.id)}" aria-label="즐겨찾기">★</button><button class="library-detail-btn" data-action="exercise-detail" data-exercise-id="${esc(exercise.id)}"><b>${esc(exercise.name)}</b><span>${esc(exerciseSubtitle(exercise))}</span></button></div><small>${isDuration(exercise) ? `시간 · ${targetText(exercise)}` : `횟수 · ${targetText(exercise)}`}${exercise.type === 'warmup' ? ' · Warmup / Mobility' : ''}</small></div><div class="library-add-row"><select class="mini-select" aria-label="추가할 루틴">${state.routines.map(routine => `<option value="${esc(routine.id)}">${esc(routine.name)}</option>`).join('')}</select><button class="secondary-btn compact-btn" data-action="add-library-to-routine" data-exercise-id="${esc(exercise.id)}">루틴에 추가</button></div></article>`).join('') : '<div class="card empty-state"><h3>검색 결과가 없어</h3><p>새 운동을 직접 추가할 수 있어.</p></div>';
+  list.innerHTML = filtered.length ? filtered.map(exercise => {
+    const preferred = preferredRoutineId(exercise);
+    const options = `${preferred ? '' : '<option value="" selected>루틴 선택</option>'}${state.routines.map(routine => `<option value="${esc(routine.id)}" ${routine.id === preferred ? 'selected' : ''}>${esc(routine.name)}</option>`).join('')}`;
+    return `<article class="library-item"><div class="library-item-main"><div class="library-title-row"><button class="favorite-btn ${exercise.favorite ? 'active' : ''}" data-action="toggle-favorite" data-exercise-id="${esc(exercise.id)}" aria-label="즐겨찾기">★</button><button class="library-detail-btn" data-action="exercise-detail" data-exercise-id="${esc(exercise.id)}"><b>${esc(exercise.name)}</b><span>${esc(exerciseSubtitle(exercise))}</span></button></div><small>${isDuration(exercise) ? `시간 · ${targetText(exercise)}` : `횟수 · ${targetText(exercise)}`}${exercise.type === 'warmup' ? ' · Warmup / Mobility' : ''}</small></div><div class="library-add-row"><select class="mini-select" aria-label="추가할 루틴">${options}</select><button class="secondary-btn compact-btn" data-action="add-library-to-routine" data-exercise-id="${esc(exercise.id)}">루틴에 추가</button></div></article>`;
+  }).join('') : '<div class="card empty-state"><h3>검색 결과가 없어</h3><p>새 운동을 직접 추가할 수 있어.</p></div>';
+}
+
+function preferredRoutineId(exercise) {
+  const defaultRoutineId = defaultRoutineIdForMuscle(exercise.muscleGroup);
+  if (state.routines.some(routine => routine.id === defaultRoutineId)) return defaultRoutineId;
+  const ranked = state.routines.map(routine => ({ routine, score: routine.items.reduce((score, item) => score + Number(exerciseById(item.exerciseId)?.muscleGroup === exercise.muscleGroup), 0) })).sort((a, b) => b.score - a.score);
+  return ranked[0]?.score > 0 ? ranked[0].routine.id : null;
 }
 
 function exerciseHistory(exerciseId) {
@@ -488,8 +649,9 @@ function renderSettings() {
   app.innerHTML = `<div class="section-head"><div><h2>설정</h2><p>데이터는 이 기기에 저장된다.</p></div></div>
     <div class="card setting-group"><h3>백업</h3><div class="setting-row"><div><b>JSON 백업 만들기</b><p>운동 · 루틴 · 세션 · 설정 전체 저장</p></div><button class="secondary-btn" data-action="export">내보내기</button></div><div class="setting-row"><div><b>백업 복원</b><p>구버전 데이터도 순서대로 변환 후 복원</p></div><button class="secondary-btn" data-action="import">가져오기</button></div></div>
     <div class="card setting-group"><h3>업데이트</h3><div class="setting-row"><div><b>${esc(updateStatusTitle())}</b><p>${esc(updateStatusMessage())}</p></div><button class="${updateAvailable ? 'primary-btn' : 'secondary-btn'} compact-btn" data-action="${updateAction}" ${updateDisabled}>${updateButton}</button></div><div class="setting-row"><div><b>현재 앱 버전</b><p>릴리스 ${esc(RELEASE_ID)} · 기록은 업데이트 후에도 유지</p></div><span class="badge">v${esc(APP_VERSION)}</span></div></div>
-    <div class="card setting-group"><h3>운동</h3><div class="setting-row"><div><b>세트 간 휴식 타이머</b><p>세트 완료 체크 시 자동 시작</p></div><label class="inline-number"><input id="restTimerSetting" type="number" min="30" max="600" step="15" value="${num(settingValue('restTimerSeconds', 120))}"><span>초</span></label></div><div class="setting-row"><div><b>Progressive Overload</b><p>운동별 반복 범위 · RIR · 중량 증가폭으로 계산</p></div><span class="badge">Double Progression</span></div></div>
-    <div class="card setting-group"><h3>앱</h3><div class="setting-row"><div><b>아이폰 홈 화면</b><p>PWA로 설치해서 전체 화면 사용</p></div><button class="secondary-btn" data-action="install">설치 안내</button></div><div class="setting-row"><div><b>로컬 데이터</b><p>${state.exercises.length}개 운동 · ${state.routines.length}개 루틴 · ${completed}개 완료 세션</p></div><span class="badge">기기 전용</span></div><div class="setting-row"><div><b>데이터 schema</b><p>v1부터 순차 migration 지원</p></div><span class="badge">v${DATA_SCHEMA_VERSION}</span></div></div>
+    <div class="card setting-group"><h3>운동</h3><div class="setting-row"><div><b>운동일 갱신</b><p>매일 오전 7시 · 00:00–06:59 기록은 전날로 저장</p></div><span class="badge">07:00</span></div><div class="setting-row"><div><b>세트 간 휴식 타이머</b><p>세트 완료 체크 시 자동 시작</p></div><label class="inline-number"><input id="restTimerSetting" type="number" min="30" max="600" step="15" value="${num(settingValue('restTimerSeconds', 120))}"><span>초</span></label></div><div class="setting-row"><div><b>Progressive Overload</b><p>운동별 반복 범위 · RIR · 중량 증가폭으로 계산</p></div><span class="badge">Double Progression</span></div></div>
+    <div class="card setting-group"><h3>아이폰</h3><div class="setting-row"><div><b>아이폰 홈 화면</b><p>PWA로 설치해서 전체 화면 사용</p></div><button class="secondary-btn" data-action="install">설치 안내</button></div><div class="setting-row"><div><b>Dynamic Island 타이머</b><p>웹앱은 ActivityKit을 사용할 수 없어 미지원 · 앱 복귀 시 남은 시간은 즉시 보정</p></div><span class="badge limitation-badge">네이티브 필요</span></div></div>
+    <div class="card setting-group"><h3>앱</h3><div class="setting-row"><div><b>로컬 데이터</b><p>${state.exercises.length}개 운동 · ${state.routines.length}개 루틴 · ${completed}개 완료 세션</p></div><span class="badge">기기 전용</span></div><div class="setting-row"><div><b>데이터 schema</b><p>v1부터 순차 migration 지원</p></div><span class="badge">v${DATA_SCHEMA_VERSION}</span></div></div>
     <div class="card setting-group"><h3>위험 구역</h3><div class="setting-row"><div><b>모든 기록 초기화</b><p>운동 세션만 삭제하고 운동과 루틴은 유지</p></div><button class="danger-btn" data-action="clear-sessions">초기화</button></div></div>
     <p class="muted small">PR+ v${APP_VERSION} · IndexedDB · Offline PWA</p>`;
 }
@@ -800,6 +962,7 @@ function showExerciseDialog(mode = 'session', routineId = null) {
   const dialog = document.querySelector('#exerciseDialog'); const search = document.querySelector('#exerciseSearch');
   const title = document.querySelector('#exerciseDialogTitle'); const hint = document.querySelector('#exerciseDialogHint');
   if (mode === 'routine') { title.textContent = '루틴에 운동 추가'; hint.textContent = `${routineById(routineId)?.name || ''} 템플릿에만 추가돼.`; }
+  else if (mode === 'editing-session') { title.textContent = '과거 기록에 운동 추가'; hint.textContent = '편집 중인 날짜의 기록에 추가돼.'; }
   else if (mode === 'library') { title.textContent = 'Exercise Library'; hint.textContent = '새 운동을 만들거나 기존 운동을 확인해.'; }
   else { title.textContent = '오늘 운동 추가'; hint.textContent = '현재 세션에만 운동을 추가해.'; }
   function fill(query = '') {
@@ -833,7 +996,7 @@ async function exportBackup() {
   };
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
-  anchor.href = url; anchor.download = `pr-plus-backup-${todayKey()}.json`; document.body.appendChild(anchor); anchor.click(); anchor.remove();
+  anchor.href = url; anchor.download = `pr-plus-backup-${localDateKey(new Date())}.json`; document.body.appendChild(anchor); anchor.click(); anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000); toast(`schema v${DATA_SCHEMA_VERSION} 백업 파일을 만들었어.`);
 }
 function prepareRestoredData(data) {
@@ -944,8 +1107,12 @@ app.addEventListener('click', async event => {
   if (action === 'add-library-to-routine') {
     const routineId = button.closest('.library-item')?.querySelector('.mini-select')?.value;
     if (routineId) await addExerciseToRoutine(routineId, button.dataset.exerciseId);
+    else toast('이 부위의 기본 루틴이 없어. 추가할 루틴을 선택해줘.');
   }
   if (action === 'toggle-history') { state.expandedSessionId = state.expandedSessionId === button.dataset.sessionId ? null : button.dataset.sessionId; renderHistory(); }
+  if (action === 'edit-session') showExistingSessionEditor(button.dataset.sessionId);
+  if (action === 'add-past-session') showNewSessionEditor(button.dataset.date);
+  if (action === 'load-more-history') { state.historyLimit += 31; renderHistory(); }
   if (action === 'export') await exportBackup();
   if (action === 'import') document.querySelector('#importFile').click();
   if (action === 'install') showInstall();
@@ -964,7 +1131,13 @@ document.querySelector('#exerciseList').addEventListener('click', async event =>
   document.querySelector('#exerciseDialog').close();
   if (state.exerciseDialogMode === 'routine') await addExerciseToRoutine(state.exerciseDialogRoutineId, button.dataset.pick);
   else if (state.exerciseDialogMode === 'session') await addExerciseToSession(button.dataset.pick);
+  else if (state.exerciseDialogMode === 'editing-session') addExerciseToEditingSession(button.dataset.pick);
   else toast('이미 Exercise Library에 등록된 운동이야.');
+});
+document.querySelector('#exerciseDialog').addEventListener('close', () => {
+  if (state.exerciseDialogMode !== 'editing-session' || !state.editingSession) return;
+  renderSessionEditor();
+  const dialog = document.querySelector('#sessionEditDialog'); if (!dialog.open) dialog.showModal();
 });
 document.querySelector('#createExerciseBtn').addEventListener('click', async () => {
   const name = document.querySelector('#customExerciseName').value.trim();
@@ -984,6 +1157,7 @@ document.querySelector('#createExerciseBtn').addEventListener('click', async () 
   document.querySelector('#customExerciseName').value = ''; document.querySelector('#customExerciseDisplayName').value = '';
   if (state.exerciseDialogMode === 'routine') await addExerciseToRoutine(state.exerciseDialogRoutineId, exercise.id);
   else if (state.exerciseDialogMode === 'session') await addExerciseToSession(exercise.id);
+  else if (state.exerciseDialogMode === 'editing-session') addExerciseToEditingSession(exercise.id);
   else { render(); toast('Exercise Library에 추가했어.'); }
 });
 
@@ -1007,6 +1181,37 @@ document.querySelector('#exerciseDetailDialog').addEventListener('click', async 
 document.querySelector('#exerciseDetailDialog').addEventListener('change', event => {
   if (event.target.id === 'detailTrackingMode') syncDetailFormMode();
 });
+document.querySelector('#closeSessionEditDialog').addEventListener('click', () => {
+  document.querySelector('#sessionEditDialog').close(); state.editingSession = null;
+});
+document.querySelector('#sessionEditDialog').addEventListener('input', event => {
+  const session = state.editingSession; if (!session) return;
+  if (event.target.id === 'editSessionDate') session.date = event.target.value;
+  if (event.target.id === 'editSessionName') session.routineName = event.target.value;
+  if (event.target.id === 'editSessionNotes') session.notes = event.target.value;
+  if (event.target.matches('[data-edit-set-field]')) {
+    const set = session.exercises[num(event.target.dataset.eidx)]?.sets[num(event.target.dataset.sidx)];
+    if (set) set[event.target.dataset.editSetField] = event.target.dataset.editSetField === 'done' ? event.target.checked : event.target.value;
+  }
+});
+document.querySelector('#sessionEditDialog').addEventListener('click', async event => {
+  const button = event.target.closest('[data-edit-action]'); if (!button || !state.editingSession) return;
+  const action = button.dataset.editAction; const exerciseIndex = num(button.dataset.eidx); const setIndex = num(button.dataset.sidx);
+  if (action === 'add-exercise') {
+    document.querySelector('#sessionEditDialog').close(); showExerciseDialog('editing-session'); return;
+  }
+  if (action === 'add-set') {
+    state.editingSession.exercises[exerciseIndex]?.sets.push({ weight: '', reps: '', duration: '', rir: '', done: false }); renderSessionEditor(); return;
+  }
+  if (action === 'remove-set') {
+    state.editingSession.exercises[exerciseIndex]?.sets.splice(setIndex, 1); renderSessionEditor(); return;
+  }
+  if (action === 'remove-log') {
+    state.editingSession.exercises.splice(exerciseIndex, 1); renderSessionEditor(); return;
+  }
+  if (action === 'save-session') await saveEditedSession();
+  if (action === 'delete-session') await deleteEditedSession();
+});
 document.querySelector('#restAddBtn').addEventListener('click', () => addRestTime(30));
 document.querySelector('#restDismissBtn').addEventListener('click', dismissRestTimer);
 document.querySelector('#importFile').addEventListener('change', event => { if (event.target.files[0]) importBackup(event.target.files[0]); event.target.value = ''; });
@@ -1021,12 +1226,17 @@ window.addEventListener('load', async () => {
   await checkForUpdate(false);
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && Date.now() - state.lastUpdateCheck > 30 * 60 * 1000) checkForUpdate(false);
+  if (document.visibilityState !== 'visible') return;
+  synchronizeTrainingDay(true).catch(console.error);
+  scheduleTrainingDayRefresh();
+  updateRestTimer(); updateDurationTimerDisplay();
+  if (Date.now() - state.lastUpdateCheck > 30 * 60 * 1000) checkForUpdate(false);
 });
 
 (async function init() {
   try {
-    state.db = await openDB(); await migrateStoredData(); await seedDefaults(); await refreshData(); render();
+    state.db = await openDB(); await migrateStoredData(); await seedDefaults(); await refreshData();
+    state.activeTrainingDay = todayKey(); scheduleTrainingDayRefresh(); render();
   } catch (error) {
     console.error(error);
     app.innerHTML = `<div class="card"><h2>저장소를 열 수 없어</h2><p class="muted">${esc(error.message || '브라우저의 사이트 데이터/개인정보 보호 설정을 확인해줘.')}</p></div>`;
