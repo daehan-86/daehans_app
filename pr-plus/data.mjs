@@ -1,5 +1,5 @@
-export const APP_VERSION = '0.2.1';
-export const RELEASE_ID = '0.2.1-r1';
+export const APP_VERSION = '0.3.0';
+export const RELEASE_ID = '0.3.0-r1';
 export const DATA_SCHEMA_VERSION = 4;
 export const TRAINING_DAY_START_HOUR = 7;
 export const DB_NAME = 'overload-db';

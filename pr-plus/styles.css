@@ -93,6 +93,7 @@ button:disabled { opacity: .45; }
 .done-check { appearance: none; width: 25px; height: 25px; border: 1px solid #404850; border-radius: 8px; background: var(--surface-2); display: inline-grid; place-items: center; }
 .done-check:checked { background: var(--accent); border-color: var(--accent); }
 .done-check:checked::after { content: "✓"; color: var(--accent-ink); font-weight: 900; }
+.set-remove-btn { width: 27px; height: 27px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: #ff8585; font-size: 17px; line-height: 1; }
 .exercise-actions { display: flex; gap: 8px; padding: 10px 15px 14px; }
 .exercise-actions button { flex: 1; }
 .exercise-actions .ghost-btn { padding-left: 5px; padding-right: 5px; font-size: 10px; }
@@ -157,7 +158,16 @@ button:disabled { opacity: .45; }
 .routine-start-card small { min-height: 30px; color: var(--muted); line-height: 1.4; }
 .routine-start-card .primary-btn { margin-top: 4px; }
 .manual-start { margin-top: 12px; }
-.session-title-row { display: flex; gap: 7px; margin-bottom: 10px; }
+.session-title-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.session-title-row > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.active-edit-btn { border: 1px solid rgba(214,255,63,.4); color: var(--accent); }
+.session-edit-banner { margin: -2px 0 12px; padding: 10px 12px; border-radius: 12px; background: rgba(214,255,63,.08); color: #d7e99a; font-size: 10px; line-height: 1.45; }
+.session-order-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: rgba(214,255,63,.055); }
+.session-order-bar > span { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.session-order-bar > div { display: flex; gap: 5px; }
+.session-order-bar button { border: 1px solid var(--line); border-radius: 9px; padding: 7px 8px; background: var(--surface-2); color: var(--text); font-size: 9px; }
+.session-order-bar button:disabled { opacity: .3; }
+.session-order-bar .remove-session-exercise { color: #ff9494; }
 .baseline-banner { display: grid; gap: 3px; margin: 0 0 12px; padding: 12px 14px; border: 1px solid rgba(214,255,63,.2); border-radius: 14px; background: rgba(214,255,63,.06); }
 .baseline-banner b { color: var(--accent); font-size: 12px; }
 .baseline-banner span { color: var(--muted); font-size: 11px; }
@@ -195,6 +205,12 @@ button:disabled { opacity: .45; }
 .history-edit-btn { justify-self: start; margin-top: 3px; }
 .history-more { margin: 2px 0 14px; }
 .history-end { text-align: center; margin: 12px 0 20px; }
+.history-period-card { display: grid; gap: 10px; margin-bottom: 14px; }
+.period-tabs { display: grid; grid-template-columns: repeat(4,1fr); gap: 7px; }
+.period-tabs .filter-chip { width: 100%; }
+.period-navigator { display: grid; grid-template-columns: 42px minmax(0,1fr) 42px; align-items: center; gap: 8px; }
+.period-navigator b { overflow: hidden; text-overflow: ellipsis; text-align: center; font-size: 13px; white-space: nowrap; }
+.period-navigator button { font-size: 20px; padding: 6px; }
 .history-detail b { font-size: 11px; }
 .history-detail span { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .subsection-head { margin: 25px 2px 12px; }
@@ -233,6 +249,9 @@ button:disabled { opacity: .45; }
 .trend-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .trend-head p { margin: 0; }
 .trend-head b { font-size: 14px; }
+.trend-head > div { display: grid; gap: 3px; }
+.trend-head small { color: var(--muted); font-size: 9px; }
+.exercise-trend-picker { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; margin-bottom: 12px; }
 .limitation-badge { color: #ffcf7a; background: rgba(255,185,70,.1); }
 .edit-log-list { display: grid; gap: 11px; }
 .edit-log { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface-2); }
@@ -250,6 +269,9 @@ button:disabled { opacity: .45; }
 .session-edit-actions { display: grid; grid-template-columns: repeat(2,1fr); gap: 8px; margin-top: 14px; }
 .session-edit-actions > :only-child { grid-column: 1 / -1; }
 .compact-empty { margin: 0; padding: 22px 12px; }
+.feedback-sheet { max-height: 90dvh; }
+.feedback-prompt { min-height: 52dvh; margin: 12px 0 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55; }
+.feedback-privacy { margin: 0 0 12px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .metric-row { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); text-align: left; }
 .metric-row:last-child { border-bottom: 0; }
 .metric-row span { display: grid; gap: 3px; }

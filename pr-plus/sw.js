@@ -1,6 +1,6 @@
 const CACHE_PREFIX = 'pr-plus-';
 const LEGACY_AUTO_UPDATE_CACHE = 'pr-plus-v0.1.0';
-const RELEASE_ID = '0.2.1-r1';
+const RELEASE_ID = '0.3.0-r1';
 const CACHE = `pr-plus-${RELEASE_ID}`;
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './data.mjs', './progression.mjs', './version.json', './manifest.webmanifest',
