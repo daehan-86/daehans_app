@@ -8,6 +8,10 @@ import {
   buildNextTarget, compareExerciseLogs, completedSets, detectPersonalRecords,
   epley, summarizeExerciseLog, targetRange, trackingModeOf
 } from './progression.mjs';
+import {
+  COACH_PROTOCOL_VERSION, coachRequestText, hashCoachContext,
+  parseCoachPlanText, validateCoachPlan
+} from './coach-protocol.mjs';
 
 const state = {
   view: 'today', db: null, exercises: [], routines: [], sessions: [], settings: [], currentSession: null,
@@ -18,7 +22,8 @@ const state = {
   detailExerciseId: null, restTimerEnd: 0, restTimerInterval: null,
   durationTimer: null, durationTimerInterval: null, activeTrainingDay: null,
   trainingDayTimer: null, historyLimit: 31, editingSession: null, editingSessionIsNew: false,
-  editTodayOrder: false, historyPeriod: 'all', historyAnchor: null, historyExerciseId: null
+  editTodayOrder: false, historyPeriod: 'all', historyAnchor: null, historyExerciseId: null,
+  coachPlans: [], pendingCoachPlan: null, pendingCoachPlanText: ''
 };
 const app = document.querySelector('#app');
 
@@ -34,6 +39,9 @@ function openDB() {
       }
       if (event.oldVersion < 2 && !db.objectStoreNames.contains(STORES.routines)) {
         db.createObjectStore(STORES.routines, { keyPath: 'id' });
+      }
+      if (event.oldVersion < 3 && !db.objectStoreNames.contains(STORES.coachPlans)) {
+        db.createObjectStore(STORES.coachPlans, { keyPath: 'id' });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -86,6 +94,7 @@ async function writeMigratedRecords(data) {
   data.routines.forEach(record => transaction.objectStore(STORES.routines).put(record));
   data.sessions.forEach(record => transaction.objectStore(STORES.sessions).put(record));
   data.settings.forEach(record => transaction.objectStore(STORES.settings).put(record));
+  data.coachPlans.forEach(record => transaction.objectStore(STORES.coachPlans).put(record));
   await transactionComplete(transaction);
 }
 async function replaceAllData(data) {
@@ -95,6 +104,7 @@ async function replaceAllData(data) {
   data.routines.forEach(record => transaction.objectStore(STORES.routines).put(record));
   data.sessions.forEach(record => transaction.objectStore(STORES.sessions).put(record));
   data.settings.forEach(record => transaction.objectStore(STORES.settings).put(record));
+  data.coachPlans.forEach(record => transaction.objectStore(STORES.coachPlans).put(record));
   await transactionComplete(transaction);
 }
 
@@ -125,14 +135,14 @@ function exerciseNameFromLog(log) {
 }
 
 async function migrateStoredData() {
-  const [exercises, routines, sessions, settings] = await Promise.all([
-    getAll(STORES.exercises), getAll(STORES.routines), getAll(STORES.sessions), getAll(STORES.settings)
+  const [exercises, routines, sessions, settings, coachPlans] = await Promise.all([
+    getAll(STORES.exercises), getAll(STORES.routines), getAll(STORES.sessions), getAll(STORES.settings), getAll(STORES.coachPlans)
   ]);
   const schemaSetting = settings.find(setting => setting.key === 'schemaVersion');
   const schemaVersion = Number(schemaSetting?.value || 2);
   if (schemaVersion > DATA_SCHEMA_VERSION) throw new Error(`이 앱보다 새로운 데이터 schema v${schemaVersion}이 저장되어 있어.`);
   if (schemaVersion === DATA_SCHEMA_VERSION) return;
-  const migrated = migrateBackupToLatest({ app: 'PR+', schemaVersion, exercises, routines, sessions, settings });
+  const migrated = migrateBackupToLatest({ app: 'PR+', schemaVersion, exercises, routines, sessions, settings, coachPlans });
   await writeMigratedRecords(migrated);
 }
 
@@ -157,13 +167,14 @@ async function seedDefaults() {
 }
 
 async function refreshData() {
-  const [exercises, routines, sessions, settings] = await Promise.all([
-    getAll(STORES.exercises), getAll(STORES.routines), getAll(STORES.sessions), getAll(STORES.settings)
+  const [exercises, routines, sessions, settings, coachPlans] = await Promise.all([
+    getAll(STORES.exercises), getAll(STORES.routines), getAll(STORES.sessions), getAll(STORES.settings), getAll(STORES.coachPlans)
   ]);
   state.exercises = exercises.map(normalizeExercise).sort((a, b) => a.name.localeCompare(b.name, 'en'));
   state.routines = routines.map(normalizeRoutine).sort((a, b) => num(a.order) - num(b.order) || a.name.localeCompare(b.name));
   state.sessions = sessions.map(normalizeSession).sort((a, b) => b.date.localeCompare(a.date) || num(b.updatedAt) - num(a.updatedAt));
   state.settings = settings;
+  state.coachPlans = coachPlans.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || num(b.importedAt) - num(a.importedAt));
   state.currentSession = state.sessions.find(session => session.date === todayKey()) || null;
 }
 
@@ -214,7 +225,12 @@ function targetText(config) {
 function loadHeader(config) {
   if (config.loadMode === 'assistance') return '보조KG';
   if (config.loadMode === 'bodyweight') return '추가KG';
+  if (config.weightBasis === 'per_hand') return 'KG/손';
+  if (config.weightBasis === 'per_side') return 'KG/쪽';
   return 'KG';
+}
+function weightBasisLabel(value) {
+  return ({ total: '총 중량', per_hand: '한 손 기준', per_side: '한쪽 기준', machine_stack: '머신 스택' })[value] || '기준 미지정';
 }
 function exerciseLogsBefore(exerciseId, currentDate = '9999-12-31') {
   return state.sessions.filter(session => session.date < currentDate).flatMap(session =>
@@ -225,14 +241,14 @@ function exerciseLogsBefore(exerciseId, currentDate = '9999-12-31') {
 function logVolume(log) {
   const exercise = exerciseById(log.exerciseId) || log;
   if (isDuration(log) || ['assistance', 'none'].includes(log.loadMode || exercise.loadMode)) return 0;
-  return log.sets.reduce((sum, set) => sum + (set.done ? num(set.weight) * num(set.reps) : 0), 0);
+  return log.sets.reduce((sum, set) => sum + (set.done && set.setRole !== 'warmup' ? num(set.weight) * num(set.reps) : 0), 0);
 }
 function sessionVolume(session) {
   return (session?.exercises || []).reduce((total, log) => total + logVolume(log), 0);
 }
 function hardSets(session) {
   return (session?.exercises || []).reduce((total, log) =>
-    total + (isWarmupLog(log) ? 0 : log.sets.filter(set => set.done).length), 0);
+    total + (isWarmupLog(log) ? 0 : log.sets.filter(set => set.done && set.setRole !== 'warmup').length), 0);
 }
 function routineWorkingSets(routine) {
   return routine.items.reduce((total, item) => total + (item.type === 'warmup' ? 0 : num(item.targetSets)), 0);
@@ -273,24 +289,41 @@ function routineStartCard(routine) {
   </article>`;
 }
 
+function symptomsMarkup(session, editing = false) {
+  const symptoms = session.symptoms || [];
+  const field = editing ? 'data-edit-symptom-field' : 'data-symptom-field';
+  const action = editing ? 'data-edit-action' : 'data-action';
+  const options = session.exercises.map(log => `<option value="${esc(log.exerciseId)}">${esc(exerciseNameFromLog(log))}</option>`).join('');
+  const rows = symptoms.map((symptom, index) => `<div class="symptom-row">
+    <select class="text-input" ${field}="exerciseId" data-symptom-index="${index}" aria-label="관련 운동"><option value="" ${!symptom.exerciseId ? 'selected' : ''}>전체 / 기타</option>${session.exercises.map(log => `<option value="${esc(log.exerciseId)}" ${symptom.exerciseId === log.exerciseId ? 'selected' : ''}>${esc(exerciseNameFromLog(log))}</option>`).join('')}</select>
+    <input class="text-input" ${field}="location" data-symptom-index="${index}" value="${esc(symptom.location || '')}" placeholder="위치 (예: 오른쪽 어깨)">
+    <label>강도<input class="text-input" type="number" min="0" max="10" ${field}="severity" data-symptom-index="${index}" value="${esc(symptom.severity ?? 0)}"></label>
+    <input class="text-input" ${field}="note" data-symptom-index="${index}" value="${esc(symptom.note || '')}" placeholder="언제 어떻게 불편했는지">
+    <button class="remove-item-btn" ${action}="remove-symptom" data-symptom-index="${index}" aria-label="증상 삭제">×</button>
+  </div>`).join('');
+  return `<section class="symptom-section"><div class="symptom-head"><div><b>통증 및 이상 신호</b><span>GPT는 증상이 있으면 증량보다 안전을 우선해.</span></div><button class="secondary-btn compact-btn" ${action}="add-symptom">＋ 추가</button></div>${rows || '<p class="muted small">기록된 증상이 없어.</p>'}</section>`;
+}
+
 function renderToday() {
   const session = state.currentSession;
   const date = dateFromKey(todayKey());
   const dateLabel = `${date.getMonth() + 1}월 ${date.getDate()}일 ${['일', '월', '화', '수', '목', '금', '토'][date.getDay()]}요일`;
   let html = `<div class="section-head"><div><h2>오늘의 훈련</h2><p>운동일은 오전 7시에 바뀐다.</p></div><div class="date-chip">${dateLabel}</div></div>`;
   if (!session || !session.exercises.length) {
-    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.3 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
+    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.3.1 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
     html += `<div class="routine-start-grid">${state.routines.map(routineStartCard).join('')}</div>`;
     html += `<button class="secondary-btn wide manual-start" data-action="add-exercise">루틴 없이 운동 추가</button>`;
   } else {
     const routineLabel = session.routineName ? `<span class="badge pr-badge">${esc(session.routineName)}</span>` : '';
     html += `<div class="session-title-row"><div>${routineLabel}${session.finishedAt ? '<span class="badge">완료됨</span>' : '<span class="badge">기록 중</span>'}</div><button class="secondary-btn compact-btn ${state.editTodayOrder ? 'active-edit-btn' : ''}" data-action="toggle-session-edit">${state.editTodayOrder ? '편집 완료' : '운동 순서 편집'}</button></div>`;
+    if (session.coachPlanRef) html += `<div class="gpt-session-banner"><b>GPT 추천 운동</b><span>Protocol ${esc(session.coachPlanRef.protocolVersion)} · 목표는 참고값이며 ACTUAL은 직접 기록해.</span></div>`;
     html += `<div class="stats-grid"><div class="stat-card"><span>오늘 완료 세트</span><b>${hardSets(session)}</b></div><div class="stat-card"><span>총 볼륨</span><b>${Math.round(sessionVolume(session)).toLocaleString()}<small> kg</small></b></div></div>`;
     html += `<div class="baseline-banner"><b>Progressive Overload</b><span>LAST와 NEXT를 참고하고, 오늘 실제 수행값과 RIR을 기록해.</span></div>`;
     if (state.editTodayOrder) html += '<div class="session-edit-banner">화살표로 순서를 바꾸거나 이 세션에서 운동을 삭제할 수 있어. 루틴 원본은 바뀌지 않아.</div>';
     session.exercises.forEach((log, index) => { html += exerciseCard(log, index); });
     html += `<label class="session-note"><span>오늘 메모</span><textarea class="text-input" data-session-note placeholder="컨디션, 자세, 통증 없이 느낀 점…">${esc(session.notes || '')}</textarea></label>`;
-    html += `<div class="session-actions"><button class="secondary-btn wide" data-action="add-exercise">＋ 운동 추가</button><button class="secondary-btn wide" data-action="feedback-today">GPT 피드백용 텍스트</button><button class="primary-btn wide" data-action="finish-session">오늘 운동 완료</button></div>`;
+    html += symptomsMarkup(session);
+    html += `<div class="session-actions"><button class="secondary-btn wide" data-action="add-exercise">＋ 운동 추가</button><button class="secondary-btn wide" data-action="feedback-today">GPT 코치 요청 복사</button><button class="primary-btn wide" data-action="finish-session">오늘 운동 완료</button></div>`;
   }
   app.innerHTML = html;
 }
@@ -317,6 +350,18 @@ function formatNextTarget(target, config) {
   if (config.loadMode === 'none') return `${metrics}회${rir}`;
   return `${config.loadMode === 'assistance' ? '보조 ' : ''}${formatKg(load)}kg · ${metrics}회${rir}`;
 }
+function setRoleSelect(set, exerciseIndex, setIndex, field = 'data-field') {
+  const attribute = field === 'data-edit-set-field' ? `data-edit-set-field="setRole"` : `data-field="setRole"`;
+  return `<select class="set-role-select" ${attribute} data-eidx="${exerciseIndex}" data-sidx="${setIndex}" aria-label="${setIndex + 1}세트 역할"><option value="" ${!set.setRole ? 'selected' : ''}>—</option><option value="warmup" ${set.setRole === 'warmup' ? 'selected' : ''}>WU</option><option value="working" ${set.setRole === 'working' ? 'selected' : ''}>WK</option><option value="backoff" ${set.setRole === 'backoff' ? 'selected' : ''}>BO</option></select>`;
+}
+function coachTargetText(target, config) {
+  if (!target) return '';
+  const role = ({ warmup: 'Warm-up', working: 'Working', backoff: 'Back-off' })[target.setRole] || '역할 미지정';
+  const weight = target.targetWeightKg === null || target.targetWeightKg === undefined ? '' : `${config.loadMode === 'assistance' ? '보조 ' : ''}${formatKg(target.targetWeightKg)}kg · `;
+  const metric = isDuration(config) ? `${target.targetDurationSec}초` : `${target.targetReps}회`;
+  const rir = target.targetRir === null || target.targetRir === undefined ? '' : ` · RIR ${target.targetRir}`;
+  return `${role} · ${weight}${metric}${rir}`;
+}
 
 function exerciseCard(log, exerciseIndex) {
   const exercise = exerciseById(log.exerciseId) || {
@@ -337,11 +382,12 @@ function exerciseCard(log, exerciseIndex) {
   const next = buildNextTarget(state.currentSession?.finishedAt && completedSets(log).length ? log : previous, config);
   const status = completedSets(log).length ? `<span class="performance-badge ${comparison.status}">${esc(comparison.label)}</span>` : '';
   const recordBadges = records.map(record => `<span class="badge pr-badge">${esc(record)}</span>`).join('');
+  const coachTargets = log.coachPrescription?.sets?.length ? `<div class="coach-target-panel"><div><b>GPT TARGET</b><span>${esc(log.coachPrescription.direction || '')}</span></div>${log.coachPrescription.sets.map((target, index) => `<p><strong>${index + 1}세트</strong><span>${esc(coachTargetText(target, config))}</span></p>`).join('')}<small>${esc(log.coachPrescription.reason || '')}</small></div>` : '';
   const orderControls = state.editTodayOrder ? `<div class="session-order-bar"><span>오늘 운동 ${exerciseIndex + 1}/${state.currentSession.exercises.length}</span><div><button data-action="move-session-exercise" data-direction="up" data-eidx="${exerciseIndex}" ${exerciseIndex === 0 ? 'disabled' : ''} aria-label="위로 이동">↑ 위로</button><button data-action="move-session-exercise" data-direction="down" data-eidx="${exerciseIndex}" ${exerciseIndex === state.currentSession.exercises.length - 1 ? 'disabled' : ''} aria-label="아래로 이동">↓ 아래로</button><button class="remove-session-exercise" data-action="remove-exercise" data-eidx="${exerciseIndex}">삭제</button></div></div>` : '';
   const rows = isDuration(config) ? log.sets.map((set, setIndex) => {
     const timerActive = state.durationTimer?.exerciseIndex === exerciseIndex && state.durationTimer?.setIndex === setIndex;
     return `<tr>
-      <td class="set-num">${setIndex + 1}</td>
+      <td class="set-num"><b>${setIndex + 1}</b>${setRoleSelect(set, exerciseIndex, setIndex)}</td>
       ${config.loadMode === 'none' ? '' : `<td><input class="set-input" inputmode="decimal" data-field="weight" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.weight ?? '')}" placeholder="kg" aria-label="${setIndex + 1}세트 중량"></td>`}
       <td><input class="set-input" inputmode="numeric" data-field="duration" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.duration ?? '')}" placeholder="초" aria-label="${setIndex + 1}세트 유지 시간"></td>
       <td><button class="timer-set-btn ${timerActive ? 'active' : ''}" data-action="toggle-duration-timer" data-eidx="${exerciseIndex}" data-sidx="${setIndex}">${timerActive ? '정지' : '시작'}</button></td>
@@ -349,7 +395,7 @@ function exerciseCard(log, exerciseIndex) {
       <td><button class="set-remove-btn" data-action="remove-set" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" aria-label="${setIndex + 1}세트 삭제">×</button></td>
     </tr>`;
   }).join('') : log.sets.map((set, setIndex) => `<tr>
-      <td class="set-num">${setIndex + 1}</td>
+      <td class="set-num"><b>${setIndex + 1}</b>${setRoleSelect(set, exerciseIndex, setIndex)}</td>
       ${config.loadMode === 'none' ? '' : `<td><input class="set-input" inputmode="decimal" data-field="weight" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.weight ?? '')}" placeholder="kg" aria-label="${setIndex + 1}세트 중량"></td>`}
       <td><input class="set-input" inputmode="numeric" data-field="reps" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.reps ?? '')}" placeholder="회" aria-label="${setIndex + 1}세트 반복수"></td>
       <td><input class="set-input" inputmode="decimal" data-field="rir" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.rir ?? '')}" placeholder="RIR" aria-label="${setIndex + 1}세트 RIR"></td>
@@ -363,7 +409,8 @@ function exerciseCard(log, exerciseIndex) {
     <div class="exercise-head"><div>${isWarmupLog(log) ? '<p class="eyebrow">WARMUP / MOBILITY</p>' : ''}<h3>${esc(exercise.name)}</h3><div class="exercise-display-name">${esc(exercise.displayName || '')}</div><div class="exercise-meta">${esc(muscleLabel(exercise.muscleGroup))} · 목표 ${targetText(config)}${log.optional ? ' · 선택' : ''}</div></div><div class="exercise-head-actions">${status}</div></div>
     ${orderControls}
     <div class="last-performance"><b>LAST</b><span>${esc(previousText)}</span></div>
-    <div class="next-target"><div><b>NEXT</b><strong>${esc(formatNextTarget(next, config))}</strong></div><span>${esc(next.message)}</span></div>
+    <div class="next-target"><div><b>APP TARGET</b><strong>${esc(formatNextTarget(next, config))}</strong></div><span>${esc(next.message)}</span></div>
+    ${coachTargets}
     ${recordBadges ? `<div class="record-row">${recordBadges}</div>` : ''}
     <table class="set-table"><thead>${headers}</thead><tbody>${rows}</tbody></table>
     <div class="exercise-actions"><button class="secondary-btn" data-action="add-set" data-eidx="${exerciseIndex}">＋ 세트</button><button class="ghost-btn" data-action="copy-prev" data-eidx="${exerciseIndex}">지난 기록 복사</button><button class="ghost-btn" data-action="exercise-detail" data-exercise-id="${esc(log.exerciseId)}">기록·설정</button></div>
@@ -371,8 +418,120 @@ function exerciseCard(log, exerciseIndex) {
   </section>`;
 }
 
+function linkedCoachSession(planId, trainingDate) {
+  return state.sessions.find(session => session.coachPlanRef?.planId === planId && session.coachPlanRef?.trainingDate === trainingDate);
+}
+function coachPlanSessionCard(plan, session, index) {
+  const linked = linkedCoachSession(plan.planId, session.trainingDate);
+  const isToday = session.trainingDate === todayKey();
+  const isPast = session.trainingDate < todayKey();
+  const status = linked?.finishedAt ? '완료' : linked ? '진행 중' : isToday ? '오늘' : isPast ? '지난 추천' : '예정';
+  const startDisabled = !isToday || Boolean(linked) ? 'disabled' : '';
+  const buttonText = linked?.finishedAt ? '수행 완료' : linked ? '진행 중' : isToday ? '추천 운동 시작' : isPast ? '기간 지남' : '예정';
+  const names = session.exercises.map(item => `${item.exerciseName} ${item.sets.length}세트`).join(' · ');
+  return `<article class="coach-session-card"><div class="coach-session-head"><div><time>${esc(session.trainingDate)} · ${esc(dayKo(session.trainingDate))}요일</time><h4>${esc(session.name)}</h4></div><span class="badge ${isToday && !linked ? 'pr-badge' : ''}">${status}</span></div><p>${esc(session.rationale)}</p><small>${esc(names)}</small><button class="primary-btn wide" data-action="start-coach-session" data-plan-id="${esc(plan.planId)}" data-session-index="${index}" ${startDisabled}>${buttonText}</button></article>`;
+}
+function coachPlanCard(plan) {
+  const needsInput = plan.status === 'needs_input';
+  const messages = [...(plan.warnings || []).map(text => ({ type: 'warning', text })), ...(plan.questions || []).map(text => ({ type: 'question', text }))];
+  return `<section class="card coach-plan-card"><div class="coach-plan-head"><div><p class="eyebrow">GPT COACH · PROTOCOL ${esc(plan.protocolVersion)}</p><h3>${esc(plan.title)}</h3><span>${esc(plan.validFrom)}–${esc(plan.validThrough)}</span></div><div><span class="badge ${needsInput ? 'limitation-badge' : 'pr-badge'}">${needsInput ? '정보 필요' : '추천 준비됨'}</span><button class="ghost-btn compact-btn" data-action="delete-coach-plan" data-plan-id="${esc(plan.planId)}">삭제</button></div></div><p class="coach-message">${esc(plan.coachMessage)}</p>${messages.length ? `<div class="coach-alerts">${messages.map(item => `<p class="${item.type}">${item.type === 'warning' ? '주의' : '질문'} · ${esc(item.text)}</p>`).join('')}</div>` : ''}${needsInput ? '<div class="coach-needs-input">질문에 답한 뒤 새 GPT 요청문을 만들어 다시 상담해줘. 운동 목표는 저장되지 않았어.</div>' : `<div class="coach-session-list">${plan.sessions.map((session, index) => coachPlanSessionCard(plan, session, index)).join('')}</div>`}</section>`;
+}
+function coachPlansMarkup() {
+  return `<div class="subsection-head coach-section-head"><div><h3>GPT 추천 운동</h3><p>GPT 계획은 기존 루틴과 분리되며 실제 수행값을 자동 완료하지 않아.</p></div><button class="primary-btn compact-btn" data-action="open-coach-import">추천 붙여넣기</button></div>${state.coachPlans.length ? `<div class="coach-plan-list">${state.coachPlans.map(coachPlanCard).join('')}</div>` : '<div class="card empty-state compact-empty"><h3>저장된 GPT 추천이 없어</h3><p>운동 기록 요청을 GPT에 보낸 뒤 받은 PLAN 블록을 붙여넣어.</p></div>'}`;
+}
+function openCoachImport() {
+  state.pendingCoachPlan = null; state.pendingCoachPlanText = '';
+  const input = document.querySelector('#coachPlanInput'); input.value = '';
+  document.querySelector('#coachPlanPreview').innerHTML = '';
+  document.querySelector('#saveCoachPlan').classList.add('hidden');
+  document.querySelector('#coachImportDialog').showModal();
+}
+function planPreviewMarkup(plan) {
+  const messages = [...plan.validationWarnings.map(text => `<p class="warning">확인 · ${esc(text)}</p>`), ...(plan.warnings || []).map(text => `<p class="warning">GPT 주의 · ${esc(text)}</p>`), ...(plan.questions || []).map(text => `<p class="question">GPT 질문 · ${esc(text)}</p>`)];
+  const sessions = plan.sessions.map(session => `<div class="coach-preview-session"><b>${esc(session.trainingDate)} · ${esc(session.name)}</b><span>${esc(session.rationale)}</span>${session.exercises.map(exercise => `<div><strong>${exercise.order}. ${esc(exercise.exerciseName)}</strong><small>${esc(exercise.direction)} · ${exercise.sets.length}세트</small><p>${exercise.sets.map(set => esc(coachTargetText(set, exercise))).join('<br>')}</p></div>`).join('')}</div>`).join('');
+  return `<div class="coach-preview-summary"><span class="badge ${plan.status === 'ready' ? 'pr-badge' : 'limitation-badge'}">${plan.status === 'ready' ? '추천 준비됨' : '정보 필요'}</span><h3>${esc(plan.title)}</h3><p>${esc(plan.coachMessage)}</p></div>${messages.length ? `<div class="coach-alerts">${messages.join('')}</div>` : ''}${sessions || '<div class="coach-needs-input">운동 계획은 보류됐어. 위 질문이나 경고를 확인해줘.</div>'}`;
+}
+async function validateCoachImport() {
+  const text = document.querySelector('#coachPlanInput').value.trim();
+  state.pendingCoachPlan = null; state.pendingCoachPlanText = text;
+  document.querySelector('#saveCoachPlan').classList.add('hidden');
+  if (!text) return toast('GPT 추천 계획을 붙여넣어줘.');
+  try {
+    const raw = parseCoachPlanText(text);
+    const request = settingValue('coachRequests', []).find(item => item.requestId === raw.requestId);
+    const plan = validateCoachPlan(raw, request, state.coachPlans.map(item => item.planId));
+    const requestTime = Date.parse(request.generatedAt);
+    const changedAfterRequest = Number.isFinite(requestTime) && [
+      ...state.sessions.map(item => num(item.updatedAt)), ...state.exercises.map(item => num(item.updatedAt)), ...state.routines.map(item => num(item.updatedAt))
+    ].some(updatedAt => updatedAt > requestTime);
+    const missingNow = plan.sessions.flatMap(session => session.exercises).filter(item => !exerciseById(item.exerciseId)).map(item => item.exerciseName);
+    plan.validationWarnings = [];
+    if (changedAfterRequest) plan.validationWarnings.push('요청문을 만든 뒤 운동 기록이나 설정이 바뀌었어. 추천 기준이 현재 상태보다 오래됐을 수 있어.');
+    if (missingNow.length) plan.validationWarnings.push(`현재 Library에서 찾을 수 없는 운동: ${[...new Set(missingNow)].join(', ')}`);
+    if (plan.validThrough < todayKey()) plan.validationWarnings.push('추천 유효기간이 이미 지났어.');
+    if (state.currentSession?.exercises?.length) plan.validationWarnings.push('오늘 진행 중인 운동이 있어. 이 계획은 현재 세션을 덮어쓰지 않아.');
+    plan.sessions.flatMap(session => session.exercises).forEach(item => {
+      const previous = previousExerciseLog(item.exerciseId, '9999-12-31'); if (!previous) return;
+      const previousLoads = completedSets(previous).filter(set => set.setRole !== 'warmup').map(set => num(set.weight)).filter(Boolean);
+      const targetLoads = item.sets.filter(set => set.setRole !== 'warmup').map(set => num(set.targetWeightKg)).filter(Boolean);
+      if (!previousLoads.length || !targetLoads.length) return;
+      if (item.loadMode === 'assistance' && Math.min(...targetLoads) < Math.min(...previousLoads) * 0.8) plan.validationWarnings.push(`${item.exerciseName} 보조 중량이 직전보다 20% 넘게 감소해 난이도가 급격히 높아져.`);
+      if (item.loadMode === 'external' && Math.max(...targetLoads) > Math.max(...previousLoads) * 1.2) plan.validationWarnings.push(`${item.exerciseName} 목표 중량이 직전보다 20% 넘게 증가해.`);
+    });
+    const previousSession = state.sessions.find(session => session.exercises?.some(log => completedSets(log).length));
+    const plannedWorkingSets = plan.sessions.reduce((total, session) => total + session.exercises.reduce((sum, item) => sum + item.sets.filter(set => set.setRole !== 'warmup').length, 0), 0);
+    if (plan.sessions.length === 1 && previousSession && hardSets(previousSession) > 0 && plannedWorkingSets > hardSets(previousSession) * 1.5) plan.validationWarnings.push('추천 working set 수가 직전 세션보다 50% 넘게 증가해.');
+    plan.rawText = text; plan.importedAt = Date.now();
+    state.pendingCoachPlan = plan;
+    document.querySelector('#coachPlanPreview').innerHTML = planPreviewMarkup(plan);
+    document.querySelector('#saveCoachPlan').classList.remove('hidden');
+    toast('Protocol 1.1 계획을 검증했어. 내용을 확인해줘.');
+  } catch (error) {
+    console.error(error);
+    document.querySelector('#coachPlanPreview').innerHTML = `<div class="coach-import-error"><b>가져올 수 없어</b><p>${esc(error.message || 'GPT 추천 형식을 확인해줘.')}</p></div>`;
+    toast('추천 계획 검증에 실패했어.');
+  }
+}
+async function savePendingCoachPlan() {
+  if (!state.pendingCoachPlan) return toast('먼저 계획을 검증해줘.');
+  try {
+    await put(STORES.coachPlans, state.pendingCoachPlan);
+    await refreshData(); state.pendingCoachPlan = null; document.querySelector('#coachImportDialog').close();
+    state.view = 'routines'; render(); toast('GPT 추천 계획을 별도로 저장했어.');
+  } catch (error) { console.error(error); toast('GPT 추천 계획을 저장하지 못했어.'); }
+}
+async function startCoachSession(planId, sessionIndex) {
+  const plan = state.coachPlans.find(item => item.planId === planId); const prescription = plan?.sessions?.[sessionIndex];
+  if (!plan || !prescription) return toast('GPT 추천 세션을 찾을 수 없어.');
+  if (plan.status !== 'ready') return toast('추가 정보가 필요한 계획은 시작할 수 없어.');
+  if (prescription.trainingDate !== todayKey()) return toast(`${prescription.trainingDate} 운동일에 시작할 수 있어.`);
+  const session = await ensureTodaySession();
+  if (session.exercises.length) return toast('오늘 진행 중인 세션이 이미 있어.');
+  const logs = prescription.exercises.map(item => {
+    const exercise = exerciseById(item.exerciseId); if (!exercise) return null;
+    const log = createSessionLog(exercise, { targetSets: item.sets.length, trackingMode: item.trackingMode, loadMode: item.loadMode, type: exercise.type });
+    log.coachPrescription = cloneCoachValue(item);
+    log.sets = item.sets.map(target => ({
+      weight: '', reps: '', duration: '', rir: '', setRole: target.setRole,
+      coachTarget: cloneCoachValue(target), done: false
+    }));
+    return log;
+  }).filter(Boolean);
+  if (logs.length !== prescription.exercises.length) return toast('현재 Library에 없는 추천 운동이 있어 시작하지 않았어.');
+  session.routineId = prescription.baseRoutineId;
+  session.routineName = prescription.name;
+  session.coachPlanRef = { planId: plan.planId, requestId: plan.requestId, trainingDate: prescription.trainingDate, protocolVersion: plan.protocolVersion };
+  session.exercises = logs; session.startedAt = Date.now(); session.finishedAt = null;
+  await saveCurrentSession(); await refreshData(); state.view = 'today'; render(); toast('GPT 목표를 참고용으로 불러왔어. 실제 수행값은 비어 있어.');
+}
+function cloneCoachValue(value) { return JSON.parse(JSON.stringify(value)); }
+async function deleteCoachPlan(planId) {
+  if (!await confirmAsk('GPT 추천 삭제', '추천 계획만 삭제할까? 이미 시작한 운동의 목표 스냅샷과 실제 기록은 유지돼.')) return;
+  await deleteRecord(STORES.coachPlans, planId); await refreshData(); renderRoutines(); toast('GPT 추천 계획을 삭제했어.');
+}
+
 function renderRoutines() {
-  app.innerHTML = `<div class="section-head"><div><h2>운동 루틴</h2><p>운동 순서와 목표 세트 · 반복 범위를 관리해.</p></div></div><div class="routine-list">${state.routines.map(routineCard).join('')}</div>`;
+  app.innerHTML = `<div class="section-head"><div><h2>운동 루틴</h2><p>GPT 추천과 내가 만든 루틴을 따로 관리해.</p></div></div>${coachPlansMarkup()}<div class="subsection-head"><h3>내 루틴</h3><p>운동 순서와 목표 세트 · 반복 범위를 관리해.</p></div><div class="routine-list">${state.routines.map(routineCard).join('')}</div>`;
 }
 function routineCard(routine) {
   const editing = state.editRoutineId === routine.id;
@@ -405,7 +564,7 @@ function renderHistory() {
   const visible = state.historyPeriod === 'all' ? timeline.slice(0, state.historyLimit) : timeline;
   const trainingDays = timeline.filter(item => item.session?.exercises?.some(log => completedSets(log).length)).length;
   const restDays = timeline.filter(item => !item.session).length;
-  app.innerHTML = `<div class="section-head"><div><h2>운동 기록</h2><p>${trainingDays}일 훈련 · ${restDays}일 휴식</p></div><button class="primary-btn compact-btn" data-action="feedback-history">GPT 상담용 요약</button></div>` +
+  app.innerHTML = `<div class="section-head"><div><h2>운동 기록</h2><p>${trainingDays}일 훈련 · ${restDays}일 휴식</p></div><button class="primary-btn compact-btn" data-action="feedback-history">GPT 코치 요청</button></div>` +
     historyPeriodControls(range) + progressMarkup(range) + exerciseProgressMarkup() +
     `<div class="subsection-head"><h3>${esc(range.label)} 기록</h3><p>미등록일은 휴식으로 표시하고, 휴식일에도 과거 기록을 추가할 수 있어.</p></div>` +
     (timeline.length ? `<div class="card history-card">${visible.map(item => item.session ? historyItem(item.session) : restDayItem(item.date)).join('')}</div>${visible.length < timeline.length ? `<button class="secondary-btn wide history-more" data-action="load-more-history">이전 기록 더 보기 (${timeline.length - visible.length}일)</button>` : '<p class="history-end muted small">첫 기록까지 모두 불러왔어.</p>'}` : '<div class="card empty-state"><h3>아직 기록이 없어</h3><p>첫 운동을 시작하면 이후 미기록일이 휴식으로 정리돼.</p></div>');
@@ -484,7 +643,7 @@ function editSetMarkup(set, log, exerciseIndex, setIndex) {
   const metric = isDuration(config)
     ? `<label>초<input class="set-input" type="number" min="0" inputmode="numeric" data-edit-set-field="duration" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.duration)}"></label>`
     : `<label>횟수<input class="set-input" type="number" min="0" inputmode="numeric" data-edit-set-field="reps" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.reps)}"></label><label>RIR<input class="set-input" type="number" min="0" max="10" inputmode="numeric" data-edit-set-field="rir" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.rir)}"></label>`;
-  return `<div class="edit-set-row"><b>${setIndex + 1}</b>${weight}${metric}<label class="edit-done">완료<input type="checkbox" data-edit-set-field="done" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" ${set.done ? 'checked' : ''}></label><button class="remove-item-btn" data-edit-action="remove-set" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" aria-label="세트 삭제">×</button></div>`;
+  return `<div class="edit-set-row"><div class="edit-set-role"><b>${setIndex + 1}</b>${setRoleSelect(set, exerciseIndex, setIndex, 'data-edit-set-field')}</div>${weight}${metric}<label class="edit-done">완료<input type="checkbox" data-edit-set-field="done" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" ${set.done ? 'checked' : ''}></label><button class="remove-item-btn" data-edit-action="remove-set" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" aria-label="세트 삭제">×</button></div>`;
 }
 function renderSessionEditor() {
   const session = state.editingSession; if (!session) return;
@@ -497,6 +656,7 @@ function renderSessionEditor() {
     <div class="edit-log-list">${logs || '<div class="card empty-state compact-empty"><h3>운동을 추가해줘</h3><p>운동과 실제 수행 세트를 입력할 수 있어.</p></div>'}</div>
     <button class="secondary-btn wide edit-add-exercise" data-edit-action="add-exercise">＋ 운동 추가</button>
     <label class="session-note"><span>메모</span><textarea id="editSessionNotes" class="text-input" placeholder="컨디션, 자세, 통증 없이 느낀 점…">${esc(session.notes || '')}</textarea></label>
+    ${symptomsMarkup(session, true)}
     <div class="session-edit-actions">${state.editingSessionIsNew ? '' : '<button class="danger-btn" data-edit-action="delete-session">기록 삭제</button>'}<button class="primary-btn" data-edit-action="save-session">저장</button></div>`;
 }
 function addExerciseToEditingSession(exerciseId) {
@@ -625,53 +785,142 @@ function exerciseProgressMarkup() {
   return `<div class="subsection-head"><h3>운동별 변화</h3><p>선택 기간과 별개로 이 종목의 전체 기록 흐름을 보여줘.</p></div><div class="exercise-trend-picker"><select id="historyExerciseSelect" class="text-input">${available.map(item => `<option value="${esc(item.exercise.id)}" ${item.exercise.id === exercise.id ? 'selected' : ''}>${esc(item.exercise.name)} · ${item.count}회</option>`).join('')}</select><button class="secondary-btn compact-btn" data-action="exercise-detail" data-exercise-id="${esc(exercise.id)}">상세</button></div>${charts || '<div class="card"><p class="muted small">그래프로 표시할 완료값이 없어.</p></div>'}`;
 }
 
-function feedbackPromptForRange(range) {
-  const sessions = sessionsInRange(range, true).sort((a, b) => a.date.localeCompare(b.date));
-  if (!sessions.length) return '';
-  const totals = periodTotals(sessions, range.from, range.to);
-  const totalDays = Math.round((dateFromKey(range.to) - dateFromKey(range.from)) / 86400000) + 1;
-  const bodyWeights = [...settingValue('bodyWeightEntries', [])].filter(entry => entry.date <= range.to).sort((a, b) => a.date.localeCompare(b.date));
-  const latestWeight = bodyWeights.at(-1);
-  const sessionText = sessions.map(session => {
-    const logs = session.exercises.filter(log => completedSets(log).length).map(log => {
-      const exercise = exerciseById(log.exerciseId) || log; const config = { ...exercise, ...log };
-      const sets = completedSets(log).map((set, index) => `${index + 1}세트 ${formatCompletedSet(set, config)}`).join(' / ');
-      const previous = previousExerciseLog(log.exerciseId, session.date); const comparison = compareExerciseLogs(log, previous, config);
-      const next = buildNextTarget(log, config);
-      return `- ${exerciseNameFromLog(log)} (${muscleLabel(exercise.muscleGroup)}, 목표 ${targetText(config)}${isWarmupLog(log) ? ', 준비운동' : ''})\n  수행: ${sets}\n  판정: ${comparison.label} — ${comparison.detail}\n  앱의 다음 목표: ${formatNextTarget(next, config)}`;
-    }).join('\n');
-    return `### ${session.date} · ${session.routineName || '개별 운동'}\n세션 합계: ${hardSets(session)} hard sets, ${Math.round(sessionVolume(session)).toLocaleString()}kg volume${session.notes ? `\n메모: ${session.notes}` : ''}\n${logs}`;
-  }).join('\n\n');
-  return `너는 근거 중심의 운동 코치야. 아래 기록을 분석하되, 기록에 없는 사실은 추측하지 말고 통증이나 부상 신호가 있으면 증량보다 안전을 우선해줘.
-
-[기록 조건]
-- 앱: PR+ v${APP_VERSION}
-- 분석 기간: ${range.label} (${range.from} ~ ${range.to})
-- 운동일 경계: 오전 7시. 00:00~06:59 운동은 전날 기록으로 계산됨
-- 볼륨은 중량 × 반복수의 합이며 시간 운동과 보조 중량 운동은 볼륨에서 제외됨
-
-[기간 요약]
-- 훈련일: ${totals.days}일
-- 휴식/미등록일: ${Math.max(0, totalDays - totals.days)}일
-- Hard sets: ${totals.sets}세트
-- 총 볼륨: ${Math.round(totals.volume).toLocaleString()}kg
-- 최근 체중: ${latestWeight ? `${latestWeight.weight}kg (${latestWeight.date})` : '기록 없음'}
-
-[운동 기록]
-${sessionText}
-
-[피드백 요청]
-1. 종목별 중량·횟수·RIR·유지시간이 실제로 발전 중인지 구분해줘.
-2. 정체, 과도한 피로, 세트 수 불균형 가능성을 기록 근거와 함께 알려줘.
-3. 다음 운동에서 유지/증량/반복 추가/감량 중 무엇을 선택할지 종목별로 제안해줘.
-4. 자세나 통증은 기록만으로 판단할 수 없다는 한계를 분명히 하고, 내가 추가로 알려줘야 할 질문을 해줘.
-5. 마지막에 다음 세션용 간단한 체크리스트를 만들어줘.`;
+function coachSetRecord(set, log, index) {
+  const duration = isDuration(log);
+  return {
+    set: index + 1,
+    setRole: set.setRole || (isWarmupLog(log) ? 'warmup' : null),
+    weightKg: ['none', 'bodyweight'].includes(log.loadMode) || set.weight === '' || set.weight === null || set.weight === undefined ? null : num(set.weight),
+    reps: duration ? null : set.reps === '' || set.reps === null || set.reps === undefined ? null : num(set.reps),
+    durationSec: duration ? set.duration === '' || set.duration === null || set.duration === undefined ? null : num(set.duration) : null,
+    rir: set.rir === '' || set.rir === null || set.rir === undefined ? null : num(set.rir),
+    completed: Boolean(set.done)
+  };
 }
-function showFeedbackPrompt(range) {
-  const prompt = feedbackPromptForRange(range);
-  if (!prompt) return toast('완료된 운동 기록이 있어야 요약할 수 있어.');
-  document.querySelector('#feedbackPrompt').value = prompt;
-  document.querySelector('#feedbackPromptRange').textContent = `${range.label} · 기록은 자동 전송되지 않아.`;
+function coachTargetRecords(target, config) {
+  return target.sets.map((set, index) => ({
+    set: index + 1,
+    setRole: isWarmupLog(config) ? 'warmup' : 'working',
+    targetWeightKg: ['none', 'bodyweight'].includes(config.loadMode) || !num(target.load ?? set.weight) ? null : num(target.load ?? set.weight),
+    targetReps: isDuration(config) ? null : num(set.metric),
+    targetDurationSec: isDuration(config) ? num(set.metric) : null,
+    targetRir: isDuration(config) ? null : num(config.targetRIRMin)
+  }));
+}
+function coachDirection(target, config) {
+  if (target.kind === 'load') return config.loadMode === 'assistance' ? 'decrease_assistance' : 'increase_load';
+  if (target.kind === 'reps') return 'increase_reps';
+  if (target.kind === 'duration') return 'increase_duration';
+  if (target.kind === 'maintain-effort' || target.kind === 'maintain' || target.kind === 'configure-load') return 'maintain';
+  return 'maintain';
+}
+function coachProfile(range) {
+  const saved = settingValue('coachProfile', {});
+  const weights = [...settingValue('bodyWeightEntries', [])].filter(entry => entry.date <= range.to).sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    goal: String(saved.goal || ''),
+    experienceLevel: String(saved.experienceLevel || ''),
+    bodyWeightKg: weights.length ? num(weights.at(-1).weight) : null,
+    availableDays: Array.isArray(saved.availableDays) ? saved.availableDays.filter(day => /^\d{4}-\d{2}-\d{2}$/.test(day)) : [],
+    equipment: Array.isArray(saved.equipment) ? saved.equipment : [],
+    sessionDurationMinutes: num(saved.sessionDurationMinutes) || null,
+    limitations: Array.isArray(saved.limitations) ? saved.limitations : [],
+    notes: String(saved.notes || '')
+  };
+}
+function coachExerciseCatalog() {
+  return state.exercises.map(exercise => {
+    const range = targetRange(exercise);
+    return {
+      exerciseId: exercise.id,
+      name: exercise.name,
+      displayName: exercise.displayName || '',
+      muscleGroup: exercise.muscleGroup,
+      type: exercise.type || 'strength',
+      trackingMode: exercise.trackingMode,
+      loadMode: exercise.loadMode,
+      weightBasis: exercise.weightBasis || null,
+      targetRange: { minimum: range.min, maximum: range.max, unit: isDuration(exercise) ? 'seconds' : 'reps' },
+      weightIncrementKg: exercise.weightIncrement ?? null,
+      metricIncrement: num(exercise.metricIncrement) || 1,
+      targetRirRange: { minimum: num(exercise.targetRIRMin), maximum: num(exercise.targetRIRMax) }
+    };
+  });
+}
+function coachRoutineRecords() {
+  return state.routines.map(routine => ({
+    routineId: routine.id, name: routine.name, displayName: routine.displayName || '',
+    items: routine.items.map((item, index) => ({
+      order: index + 1, exerciseId: item.exerciseId, targetSets: item.targetSets,
+      targetMinimum: isDuration(item) ? item.durationMin : item.repMin,
+      targetMaximum: isDuration(item) ? item.durationMax : item.repMax,
+      targetUnit: isDuration(item) ? 'seconds' : 'reps', optional: Boolean(item.optional)
+    }))
+  }));
+}
+async function feedbackPromptForRange(range) {
+  const sessions = sessionsInRange(range, true).sort((a, b) => a.date.localeCompare(b.date));
+  if (!sessions.length) return null;
+  const recentSessions = sessions.map(session => ({
+    trainingDate: session.date,
+    routineId: session.routineId || null,
+    routineName: session.routineName || '',
+    coachPlanRef: session.coachPlanRef ? { ...session.coachPlanRef } : null,
+    notes: session.notes || '',
+    symptoms: (session.symptoms || []).map(symptom => ({ ...symptom })),
+    exercises: session.exercises.filter(log => completedSets(log).length).map(log => {
+      const exercise = exerciseById(log.exerciseId) || log; const config = { ...exercise, ...log };
+      return {
+        exerciseId: log.exerciseId,
+        trackingMode: config.trackingMode,
+        loadMode: config.loadMode,
+        weightBasis: exercise.weightBasis || null,
+        coachPrescription: log.coachPrescription ? cloneCoachValue(log.coachPrescription) : null,
+        sets: completedSets(log).map((set, index) => coachSetRecord(set, config, index))
+      };
+    })
+  }));
+  const latestByExercise = new Map();
+  sessions.forEach(session => session.exercises.forEach(log => {
+    if (completedSets(log).length) latestByExercise.set(log.exerciseId, log);
+  }));
+  const appSuggestions = [...latestByExercise.values()].map(log => {
+    const exercise = exerciseById(log.exerciseId) || log; const config = { ...exercise, ...log };
+    const target = buildNextTarget(log, config);
+    return { exerciseId: log.exerciseId, direction: coachDirection(target, config), message: target.message, sets: coachTargetRecords(target, config) };
+  });
+  const core = {
+    appVersion: APP_VERSION,
+    protocolVersion: COACH_PROTOCOL_VERSION,
+    trainingDay: { timeZone: 'Asia/Seoul', startsAtHour: 7 },
+    units: { weight: 'kg', duration: 'seconds' },
+    sourcePeriod: { from: range.from, through: range.to, label: range.label },
+    requestedPeriod: { from: todayKey(), through: shiftDateKey(todayKey(), 7), maximumSessions: 4 },
+    athleteProfile: coachProfile(range),
+    exerciseCatalog: coachExerciseCatalog(),
+    routines: coachRoutineRecords(),
+    recentSessions,
+    appSuggestions,
+    coachRequest: {
+      focus: '기록과 RIR, 증상, 세트 역할을 근거로 다음 운동의 세트별 목표를 정해줘.',
+      questions: []
+    }
+  };
+  const request = {
+    protocol: 'PRPLUS_COACH_REQUEST', protocolVersion: COACH_PROTOCOL_VERSION,
+    requestId: uid('request'), contextHash: await hashCoachContext(core),
+    generatedAt: new Date().toISOString(), ...core
+  };
+  const saved = [...settingValue('coachRequests', []), request].slice(-10);
+  await saveSetting('coachRequests', saved);
+  return { request, text: coachRequestText(request) };
+}
+async function showFeedbackPrompt(range) {
+  let generated;
+  try { generated = await feedbackPromptForRange(range); } catch (error) { console.error(error); return toast('GPT 요청문을 만들지 못했어.'); }
+  if (!generated) return toast('완료된 운동 기록이 있어야 요청문을 만들 수 있어.');
+  document.querySelector('#feedbackPrompt').value = generated.text;
+  document.querySelector('#feedbackPromptRange').textContent = `${range.label} · Coach Protocol v${COACH_PROTOCOL_VERSION} · 자동 전송되지 않아.`;
   document.querySelector('#feedbackDialog').showModal();
 }
 async function copyFeedbackPrompt() {
@@ -741,7 +990,7 @@ function showExerciseDetail(exerciseId) {
     : `${hasE1RM ? `<div class="card detail-chart"><p class="eyebrow">ESTIMATED 1RM</p>${lineChartMarkup(series, 'kg')}</div>` : ''}<div class="card detail-chart"><p class="eyebrow">REP PROGRESSION</p>${lineChartMarkup(repSeries, '회')}</div>${loadSeries.length ? `<div class="card detail-chart"><p class="eyebrow">${exercise.loadMode === 'assistance' ? 'ASSISTANCE (LOWER IS HARDER)' : 'LOAD PROGRESSION'}</p>${lineChartMarkup(loadSeries, 'kg')}</div>` : ''}`;
   const latest = summaries.at(-1);
   document.querySelector('#exerciseDetailTitle').textContent = exercise.name;
-  document.querySelector('#exerciseDetailContent').innerHTML = `<p class="detail-subtitle">${esc(exerciseSubtitle(exercise))}</p>
+  document.querySelector('#exerciseDetailContent').innerHTML = `<p class="detail-subtitle">${esc(exerciseSubtitle(exercise))} · ${esc(weightBasisLabel(exercise.weightBasis))}</p>
     <div class="detail-stats"><div><span>세션</span><b>${history.length}</b></div><div><span>${duration ? '최장 유지' : hasE1RM ? '최고 e1RM' : '최고 반복'}</span><b>${latest ? formatKg(Math.max(...series)) : '—'}${latest ? suffix : ''}</b></div></div>
     ${progressCharts}
     <div class="detail-history"><h3>최근 기록</h3>${history.length ? [...history].reverse().slice(0, 8).map(({ session, log }) => `<div><time>${esc(session.date)}</time><span>${completedSets(log).map(set => esc(formatCompletedSet(set, { ...exercise, ...log }))).join(' · ')}</span></div>`).join('') : '<p class="muted small">완료 기록이 없어.</p>'}</div>
@@ -750,6 +999,7 @@ function showExerciseDetail(exerciseId) {
       <label class="favorite-toggle"><input id="detailFavorite" type="checkbox" ${exercise.favorite ? 'checked' : ''}> 즐겨찾기</label>
       <label>기록 방식<select id="detailTrackingMode" class="text-input"><option value="reps" ${!duration ? 'selected' : ''}>횟수</option><option value="duration" ${duration ? 'selected' : ''}>시간(초)</option></select></label>
       <label>중량 방식<select id="detailLoadMode" class="text-input"><option value="external" ${exercise.loadMode === 'external' ? 'selected' : ''}>외부 중량</option><option value="assistance" ${exercise.loadMode === 'assistance' ? 'selected' : ''}>보조 중량</option><option value="bodyweight" ${exercise.loadMode === 'bodyweight' ? 'selected' : ''}>맨몸 / 추가 중량</option><option value="none" ${exercise.loadMode === 'none' ? 'selected' : ''}>중량 없음</option></select></label>
+      <label>중량 표시 기준<select id="detailWeightBasis" class="text-input"><option value="" ${!exercise.weightBasis ? 'selected' : ''}>미지정</option><option value="total" ${exercise.weightBasis === 'total' ? 'selected' : ''}>총 중량</option><option value="per_hand" ${exercise.weightBasis === 'per_hand' ? 'selected' : ''}>한 손 기준</option><option value="per_side" ${exercise.weightBasis === 'per_side' ? 'selected' : ''}>한쪽 기준</option><option value="machine_stack" ${exercise.weightBasis === 'machine_stack' ? 'selected' : ''}>머신 스택</option></select></label>
       <div class="range-grid" data-detail-mode="reps"><label>최소 반복<input id="detailRepMin" class="text-input" type="number" min="1" value="${exercise.repMin}"></label><label>최대 반복<input id="detailRepMax" class="text-input" type="number" min="1" value="${exercise.repMax}"></label></div>
       <div class="range-grid" data-detail-mode="duration"><label>최소 시간(초)<input id="detailDurationMin" class="text-input" type="number" min="1" value="${exercise.durationMin || 10}"></label><label>최대 시간(초)<input id="detailDurationMax" class="text-input" type="number" min="1" value="${exercise.durationMax || 60}"></label></div>
       <label data-detail-mode="duration">시간 목표 증가폭(초)<input id="detailMetricIncrement" class="text-input" type="number" min="1" value="${exercise.metricIncrement || 5}"></label>
@@ -765,11 +1015,13 @@ function showExerciseDetail(exerciseId) {
 
 function renderSettings() {
   const completed = state.sessions.filter(session => session.exercises?.some(log => completedSets(log).length)).length;
+  const coachProfile = settingValue('coachProfile', {});
   const updateAvailable = state.updateStatus === 'available';
   const updateAction = updateAvailable ? 'apply-update' : 'check-update';
   const updateButton = updateAvailable ? '업데이트' : state.updateStatus === 'checking' || state.updateStatus === 'downloading' ? '확인 중…' : '업데이트 확인';
   const updateDisabled = ['checking', 'downloading', 'applying'].includes(state.updateStatus) ? 'disabled' : '';
   app.innerHTML = `<div class="section-head"><div><h2>설정</h2><p>데이터는 이 기기에 저장된다.</p></div></div>
+    <div class="card setting-group"><h3>GPT 코치 프로필</h3><div class="form-grid coach-profile-form"><label>운동 목표<input class="text-input" data-coach-profile="goal" value="${esc(coachProfile.goal || '')}" placeholder="예: 근비대와 점진적 과부하"></label><label>경험 수준<select class="text-input" data-coach-profile="experienceLevel"><option value="" ${!coachProfile.experienceLevel ? 'selected' : ''}>미입력</option><option value="beginner" ${coachProfile.experienceLevel === 'beginner' ? 'selected' : ''}>초급</option><option value="intermediate" ${coachProfile.experienceLevel === 'intermediate' ? 'selected' : ''}>중급</option><option value="advanced" ${coachProfile.experienceLevel === 'advanced' ? 'selected' : ''}>고급</option></select></label><label>운동 가능 시간(분)<input class="text-input" type="number" min="1" max="600" data-coach-profile="sessionDurationMinutes" value="${esc(coachProfile.sessionDurationMinutes || '')}" placeholder="예: 60"></label><label>사용 가능 장비<input class="text-input" data-coach-profile="equipment" value="${esc((coachProfile.equipment || []).join(', '))}" placeholder="쉼표로 구분"></label><label>추천 가능 날짜<input class="text-input" data-coach-profile="availableDays" value="${esc((coachProfile.availableDays || []).join(', '))}" placeholder="2026-08-26, 2026-08-28"></label><label>통증·부상·제한사항<textarea class="text-input" data-coach-profile="limitations" placeholder="한 줄에 하나씩 입력">${esc((coachProfile.limitations || []).join('\n'))}</textarea></label><label>코치가 알아야 할 내용<textarea class="text-input" data-coach-profile="notes">${esc(coachProfile.notes || '')}</textarea></label></div><p class="muted small">요청문을 복사할 때만 포함되며 자동 전송되지 않아.</p></div>
     <div class="card setting-group"><h3>백업</h3><div class="setting-row"><div><b>JSON 백업 만들기</b><p>운동 · 루틴 · 세션 · 설정 전체 저장</p></div><button class="secondary-btn" data-action="export">내보내기</button></div><div class="setting-row"><div><b>백업 복원</b><p>구버전 데이터도 순서대로 변환 후 복원</p></div><button class="secondary-btn" data-action="import">가져오기</button></div></div>
     <div class="card setting-group"><h3>업데이트</h3><div class="setting-row"><div><b>${esc(updateStatusTitle())}</b><p>${esc(updateStatusMessage())}</p></div><button class="${updateAvailable ? 'primary-btn' : 'secondary-btn'} compact-btn" data-action="${updateAction}" ${updateDisabled}>${updateButton}</button></div><div class="setting-row"><div><b>현재 앱 버전</b><p>릴리스 ${esc(RELEASE_ID)} · 기록은 업데이트 후에도 유지</p></div><span class="badge">v${esc(APP_VERSION)}</span></div></div>
     <div class="card setting-group"><h3>운동</h3><div class="setting-row"><div><b>운동일 갱신</b><p>매일 오전 7시 · 00:00–06:59 기록은 전날로 저장</p></div><span class="badge">07:00</span></div><div class="setting-row"><div><b>세트 간 휴식 타이머</b><p>세트 완료 체크 시 자동 시작</p></div><label class="inline-number"><input id="restTimerSetting" type="number" min="30" max="600" step="15" value="${num(settingValue('restTimerSeconds', 120))}"><span>초</span></label></div><div class="setting-row"><div><b>Progressive Overload</b><p>운동별 반복 범위 · RIR · 중량 증가폭으로 계산</p></div><span class="badge">Double Progression</span></div></div>
@@ -929,11 +1181,11 @@ function createSessionLog(exercise, options = {}) {
     type: options.type || exercise.type || 'strength', targetSets, repMin: num(options.repMin ?? exercise.repMin),
     repMax: num(options.repMax ?? exercise.repMax), durationMin: num(options.durationMin ?? exercise.durationMin),
     durationMax: num(options.durationMax ?? exercise.durationMax), trackingMode: options.trackingMode || exercise.trackingMode || 'reps',
-    loadMode: options.loadMode || exercise.loadMode || 'external', metricIncrement: num(exercise.metricIncrement || 1),
+    loadMode: options.loadMode || exercise.loadMode || 'external', weightBasis: exercise.weightBasis || null, metricIncrement: num(exercise.metricIncrement || 1),
     weightIncrement: exercise.weightIncrement ?? null, weightStep: exercise.weightStep ?? null,
     targetRIRMin: num(exercise.targetRIRMin ?? 1), targetRIRMax: num(exercise.targetRIRMax ?? 3),
     optional: Boolean(options.optional),
-    sets: Array.from({ length: targetSets }, () => ({ weight: '', reps: '', duration: '', rir: '', done: false }))
+    sets: Array.from({ length: targetSets }, () => ({ weight: '', reps: '', duration: '', rir: '', setRole: options.type === 'warmup' || exercise.type === 'warmup' ? 'warmup' : 'working', coachTarget: null, done: false }))
   };
 }
 async function startRoutine(routineId) {
@@ -1012,6 +1264,7 @@ async function saveExerciseSettings() {
   const updated = normalizeExercise({
     ...exercise, trackingMode, repMin, repMax, durationMin, durationMax,
     loadMode: document.querySelector('#detailLoadMode').value,
+    weightBasis: document.querySelector('#detailWeightBasis').value || null,
     metricIncrement: num(document.querySelector('#detailMetricIncrement').value) || 1,
     weightIncrement: document.querySelector('#detailWeightIncrement').value,
     weightStep: document.querySelector('#detailWeightStep').value,
@@ -1138,7 +1391,7 @@ async function exportBackup() {
   const backup = {
     app: 'PR+', appVersion: APP_VERSION, version: DATA_SCHEMA_VERSION, schemaVersion: DATA_SCHEMA_VERSION,
     exportedAt: new Date().toISOString(), exercises: await getAll(STORES.exercises), routines: await getAll(STORES.routines),
-    sessions: await getAll(STORES.sessions), settings: await getAll(STORES.settings)
+    sessions: await getAll(STORES.sessions), settings: await getAll(STORES.settings), coachPlans: await getAll(STORES.coachPlans)
   };
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
@@ -1163,7 +1416,8 @@ function prepareRestoredData(data) {
     exercises,
     routines,
     sessions: data.sessions.map(normalizeSession),
-    settings
+    settings,
+    coachPlans: Array.isArray(data.coachPlans) ? data.coachPlans : []
   };
 }
 async function importBackup(file) {
@@ -1182,6 +1436,12 @@ app.addEventListener('input', async event => {
   const element = event.target;
   if (element.id === 'librarySearch') { state.libraryQuery = element.value; renderLibraryList(); return; }
   if (element.matches('[data-session-note]') && state.currentSession) { state.currentSession.notes = element.value; await saveCurrentSession(); return; }
+  if (element.matches('[data-symptom-field]') && state.currentSession) {
+    const symptom = state.currentSession.symptoms?.[num(element.dataset.symptomIndex)]; if (!symptom) return;
+    const field = element.dataset.symptomField;
+    symptom[field] = field === 'severity' ? Math.min(10, Math.max(0, num(element.value))) : element.value;
+    await saveCurrentSession(); return;
+  }
   if (!element.matches('[data-field]') || !state.currentSession) return;
   const set = state.currentSession.exercises[num(element.dataset.eidx)]?.sets[num(element.dataset.sidx)];
   if (!set) return;
@@ -1204,6 +1464,14 @@ app.addEventListener('change', async event => {
     if (field.endsWith('Max')) { const minField = field.replace('Max', 'Min'); if (item[field] < item[minField]) item[minField] = item[field]; }
     await saveRoutine(routine); await refreshData(); renderRoutines();
   }
+  if (element.matches('[data-coach-profile]')) {
+    const profile = { ...settingValue('coachProfile', {}) }; const field = element.dataset.coachProfile;
+    if (['equipment', 'availableDays'].includes(field)) profile[field] = element.value.split(',').map(value => value.trim()).filter(Boolean);
+    else if (field === 'limitations') profile[field] = element.value.split('\n').map(value => value.trim()).filter(Boolean);
+    else if (field === 'sessionDurationMinutes') profile[field] = num(element.value) || null;
+    else profile[field] = element.value.trim();
+    await saveSetting('coachProfile', profile); toast('GPT 코치 프로필을 저장했어.'); return;
+  }
   if (element.id === 'restTimerSetting') {
     const seconds = Math.min(600, Math.max(30, num(element.value)));
     await saveSetting('restTimerSeconds', seconds); element.value = seconds; toast('휴식 시간을 저장했어.');
@@ -1215,18 +1483,30 @@ app.addEventListener('click', async event => {
   const button = event.target.closest('[data-action]'); if (!button) return;
   const action = button.dataset.action;
   if (action === 'add-exercise') showExerciseDialog('session');
+  if (action === 'add-symptom' && state.currentSession) {
+    state.currentSession.symptoms = state.currentSession.symptoms || [];
+    state.currentSession.symptoms.push({ exerciseId: null, location: '', severity: 0, note: '' });
+    await saveCurrentSession(); renderToday();
+  }
+  if (action === 'remove-symptom' && state.currentSession) {
+    state.currentSession.symptoms?.splice(num(button.dataset.symptomIndex), 1);
+    await saveCurrentSession(); renderToday();
+  }
   if (action === 'toggle-session-edit') { state.editTodayOrder = !state.editTodayOrder; renderToday(); }
   if (action === 'move-session-exercise') await moveCurrentExercise(num(button.dataset.eidx), button.dataset.direction);
   if (action === 'start-routine') await startRoutine(button.dataset.routineId);
+  if (action === 'open-coach-import') openCoachImport();
+  if (action === 'start-coach-session') await startCoachSession(button.dataset.planId, num(button.dataset.sessionIndex));
+  if (action === 'delete-coach-plan') await deleteCoachPlan(button.dataset.planId);
   if (action === 'add-set') {
     const log = state.currentSession.exercises[num(button.dataset.eidx)]; const last = log.sets.at(-1) || {};
-    log.sets.push({ weight: last.weight ?? '', reps: '', duration: '', rir: '', done: false }); log.targetSets = log.sets.length; await saveCurrentSession(); renderToday();
+    log.sets.push({ weight: last.weight ?? '', reps: '', duration: '', rir: '', setRole: isWarmupLog(log) ? 'warmup' : 'working', coachTarget: null, done: false }); log.targetSets = log.sets.length; await saveCurrentSession(); renderToday();
   }
   if (action === 'remove-set') await removeCurrentSet(num(button.dataset.eidx), num(button.dataset.sidx));
   if (action === 'copy-prev') {
     const log = state.currentSession.exercises[num(button.dataset.eidx)]; const previous = previousExerciseLog(log.exerciseId, state.currentSession.date);
     if (!previous) return toast('복사할 이전 기록이 없어.');
-    log.sets = previous.sets.filter(set => set.done).map(set => ({ weight: set.weight, reps: set.reps, duration: set.duration ?? '', rir: set.rir, done: false }));
+    log.sets = previous.sets.filter(set => set.done).map(set => ({ weight: set.weight, reps: set.reps, duration: set.duration ?? '', rir: set.rir, setRole: set.setRole || (isWarmupLog(log) ? 'warmup' : 'working'), coachTarget: null, done: false }));
     await saveCurrentSession(); renderToday(); toast('지난 기록을 불러왔어. 완료 체크는 비워뒀어.');
   }
   if (action === 'remove-exercise' && await confirmAsk('운동 삭제', '오늘 세션에서 이 운동과 입력한 세트를 삭제할까?')) {
@@ -1259,8 +1539,8 @@ app.addEventListener('click', async event => {
   if (action === 'save-body-weight') await saveBodyWeight();
   if (action === 'history-period') { state.historyPeriod = button.dataset.period; state.historyAnchor = todayKey(); state.historyLimit = 31; renderHistory(); }
   if (action === 'shift-history-period') { shiftHistoryPeriod(button.dataset.direction); renderHistory(); }
-  if (action === 'feedback-history') showFeedbackPrompt(historyPeriodRange());
-  if (action === 'feedback-today') showFeedbackPrompt(historyPeriodRange('day', state.currentSession?.date || todayKey()));
+  if (action === 'feedback-history') await showFeedbackPrompt(historyPeriodRange());
+  if (action === 'feedback-today') await showFeedbackPrompt(historyPeriodRange('day', state.currentSession?.date || todayKey()));
   if (action === 'add-library-to-routine') {
     const routineId = button.closest('.library-item')?.querySelector('.mini-select')?.value;
     if (routineId) await addExerciseToRoutine(routineId, button.dataset.exerciseId);
@@ -1302,10 +1582,11 @@ document.querySelector('#createExerciseBtn').addEventListener('click', async () 
   const muscleGroup = document.querySelector('#customExerciseMuscle').value;
   const trackingMode = document.querySelector('#customTrackingMode').value;
   const loadMode = document.querySelector('#customLoadMode').value;
+  const weightBasis = document.querySelector('#customWeightBasis').value || null;
   const match = document.querySelector('#customTargetRange').value.trim().match(/(\d+)\s*[-~]\s*(\d+)/);
   if (!name || !match) return toast('이름과 목표 범위를 확인해줘.');
   if (findDefaultExercise(name) || findDefaultExercise(displayName) || state.exercises.some(exercise => exercise.name.toLowerCase() === name.toLowerCase())) return toast('같은 운동이 이미 Library에 있어.');
-  const exercise = normalizeExercise({ id: uid('exercise'), name, displayName, muscleGroup, trackingMode, loadMode,
+  const exercise = normalizeExercise({ id: uid('exercise'), name, displayName, muscleGroup, trackingMode, loadMode, weightBasis,
     repMin: trackingMode === 'reps' ? num(match[1]) : 0, repMax: trackingMode === 'reps' ? num(match[2]) : 0,
     durationMin: trackingMode === 'duration' ? num(match[1]) : 0, durationMax: trackingMode === 'duration' ? num(match[2]) : 0,
     metricIncrement: trackingMode === 'duration' ? 5 : 1, type: 'strength', builtIn: false, createdAt: Date.now() });
@@ -1343,11 +1624,19 @@ document.querySelector('#closeSessionEditDialog').addEventListener('click', () =
 });
 document.querySelector('#closeFeedbackDialog').addEventListener('click', () => document.querySelector('#feedbackDialog').close());
 document.querySelector('#copyFeedbackPrompt').addEventListener('click', copyFeedbackPrompt);
+document.querySelector('#closeCoachImportDialog').addEventListener('click', () => document.querySelector('#coachImportDialog').close());
+document.querySelector('#validateCoachPlan').addEventListener('click', validateCoachImport);
+document.querySelector('#saveCoachPlan').addEventListener('click', savePendingCoachPlan);
 document.querySelector('#sessionEditDialog').addEventListener('input', event => {
   const session = state.editingSession; if (!session) return;
   if (event.target.id === 'editSessionDate') session.date = event.target.value;
   if (event.target.id === 'editSessionName') session.routineName = event.target.value;
   if (event.target.id === 'editSessionNotes') session.notes = event.target.value;
+  if (event.target.matches('[data-edit-symptom-field]')) {
+    const symptom = session.symptoms?.[num(event.target.dataset.symptomIndex)]; if (!symptom) return;
+    const field = event.target.dataset.editSymptomField;
+    symptom[field] = field === 'severity' ? Math.min(10, Math.max(0, num(event.target.value))) : event.target.value;
+  }
   if (event.target.matches('[data-edit-set-field]')) {
     const set = session.exercises[num(event.target.dataset.eidx)]?.sets[num(event.target.dataset.sidx)];
     if (set) set[event.target.dataset.editSetField] = event.target.dataset.editSetField === 'done' ? event.target.checked : event.target.value;
@@ -1359,8 +1648,16 @@ document.querySelector('#sessionEditDialog').addEventListener('click', async eve
   if (action === 'add-exercise') {
     document.querySelector('#sessionEditDialog').close(); showExerciseDialog('editing-session'); return;
   }
+  if (action === 'add-symptom') {
+    state.editingSession.symptoms = state.editingSession.symptoms || [];
+    state.editingSession.symptoms.push({ exerciseId: null, location: '', severity: 0, note: '' }); renderSessionEditor(); return;
+  }
+  if (action === 'remove-symptom') {
+    state.editingSession.symptoms?.splice(num(button.dataset.symptomIndex), 1); renderSessionEditor(); return;
+  }
   if (action === 'add-set') {
-    state.editingSession.exercises[exerciseIndex]?.sets.push({ weight: '', reps: '', duration: '', rir: '', done: false }); renderSessionEditor(); return;
+    const log = state.editingSession.exercises[exerciseIndex];
+    log?.sets.push({ weight: '', reps: '', duration: '', rir: '', setRole: isWarmupLog(log) ? 'warmup' : 'working', coachTarget: null, done: false }); renderSessionEditor(); return;
   }
   if (action === 'remove-set') {
     state.editingSession.exercises[exerciseIndex]?.sets.splice(setIndex, 1); renderSessionEditor(); return;

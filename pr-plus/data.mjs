@@ -1,14 +1,15 @@
-export const APP_VERSION = '0.3.0';
-export const RELEASE_ID = '0.3.0-r1';
-export const DATA_SCHEMA_VERSION = 4;
+export const APP_VERSION = '0.3.1';
+export const RELEASE_ID = '0.3.1-r1';
+export const DATA_SCHEMA_VERSION = 5;
 export const TRAINING_DAY_START_HOUR = 7;
 export const DB_NAME = 'overload-db';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const STORES = {
   exercises: 'exercises',
   routines: 'routines',
   sessions: 'sessions',
-  settings: 'settings'
+  settings: 'settings',
+  coachPlans: 'coachPlans'
 };
 
 const MUSCLE_LABELS = {
@@ -150,6 +151,8 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const asArray = value => Array.isArray(value) ? value : [];
 const finiteNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const optionalPositiveNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) <= 0 ? null : Number(value);
+const SET_ROLES = ['warmup', 'working', 'backoff'];
+const WEIGHT_BASES = ['total', 'per_hand', 'per_side', 'machine_stack'];
 
 export function localDateKey(value = new Date()) {
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
@@ -220,6 +223,7 @@ export function normalizeExercise(exercise) {
     trackingMode,
     metricIncrement: Math.max(1, finiteNumber(source.metricIncrement, matched?.metricIncrement ?? (trackingMode === 'duration' ? 5 : 1))),
     loadMode,
+    weightBasis: WEIGHT_BASES.includes(source.weightBasis) ? source.weightBasis : null,
     weightIncrement: optionalPositiveNumber(source.weightIncrement),
     weightStep: optionalPositiveNumber(source.weightStep),
     targetRIRMin: Math.max(0, finiteNumber(source.targetRIRMin, matched?.targetRIRMin ?? 1)),
@@ -239,6 +243,12 @@ export function normalizeSession(session) {
     id: String(source.id || ''),
     date: String(source.date || '').slice(0, 10),
     notes: String(source.notes || ''),
+    symptoms: asArray(source.symptoms).map(symptom => ({
+      exerciseId: symptom?.exerciseId ? String(symptom.exerciseId) : null,
+      location: String(symptom?.location || '').trim(),
+      severity: Math.min(10, Math.max(0, finiteNumber(symptom?.severity, 0))),
+      note: String(symptom?.note || '').trim()
+    })).filter(symptom => symptom.location),
     exercises: asArray(source.exercises).map(log => {
       const matched = DEFAULT_EXERCISES.find(exercise => exercise.id === log.exerciseId) || findDefaultExercise(log.name);
       const trackingMode = log.trackingMode === 'duration' || (!log.trackingMode && matched?.trackingMode === 'duration') ? 'duration' : 'reps';
@@ -255,6 +265,8 @@ export function normalizeSession(session) {
         reps: set.reps ?? '',
         duration: set.duration ?? '',
         rir: set.rir ?? '',
+        setRole: SET_ROLES.includes(set.setRole) ? set.setRole : null,
+        coachTarget: set.coachTarget && typeof set.coachTarget === 'object' ? clone(set.coachTarget) : null,
         done: Boolean(set.done ?? set.completed)
       }))
     }; })
@@ -361,10 +373,28 @@ export function migrateBackupV3ToV4(data) {
   };
 }
 
+export function migrateBackupV4ToV5(data) {
+  const settings = asArray(data?.settings).filter(setting => setting?.key !== 'schemaVersion');
+  settings.push({ key: 'schemaVersion', value: 5 });
+  return {
+    ...clone(data),
+    app: 'PR+',
+    appVersion: APP_VERSION,
+    version: 5,
+    schemaVersion: 5,
+    exercises: asArray(data?.exercises).map(normalizeExercise),
+    routines: asArray(data?.routines).map(normalizeRoutine),
+    sessions: asArray(data?.sessions).map(normalizeSession),
+    settings,
+    coachPlans: asArray(data?.coachPlans).map(plan => clone(plan))
+  };
+}
+
 const BACKUP_MIGRATIONS = {
   1: migrateBackupV1ToV2,
   2: migrateBackupV2ToV3,
-  3: migrateBackupV3ToV4
+  3: migrateBackupV3ToV4,
+  4: migrateBackupV4ToV5
 };
 
 function validateRecordIds(records, label) {
@@ -379,10 +409,12 @@ function validateRecordIds(records, label) {
 export function validateBackup(data) {
   if (!['PR+', 'OVERLOAD'].includes(data?.app)) throw new Error('PR+ 또는 OVERLOAD 백업 파일이 아니야.');
   if (!Array.isArray(data.exercises) || !Array.isArray(data.sessions)) throw new Error('운동 또는 세션 데이터가 올바르지 않아.');
-  if (data.schemaVersion === DATA_SCHEMA_VERSION && !Array.isArray(data.routines)) throw new Error('루틴 데이터가 올바르지 않아.');
+  if (data.schemaVersion >= 4 && !Array.isArray(data.routines)) throw new Error('루틴 데이터가 올바르지 않아.');
+  if (data.schemaVersion === DATA_SCHEMA_VERSION && !Array.isArray(data.coachPlans)) throw new Error('GPT 추천 계획 데이터가 올바르지 않아.');
   validateRecordIds(data.exercises, '운동 목록');
   validateRecordIds(data.sessions, '세션 목록');
   if (Array.isArray(data.routines)) validateRecordIds(data.routines, '루틴 목록');
+  if (Array.isArray(data.coachPlans)) validateRecordIds(data.coachPlans, 'GPT 추천 계획');
   data.sessions.forEach(session => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(session.date || ''))) throw new Error(`세션 날짜가 올바르지 않아: ${session.id}`);
     if (!Array.isArray(session.exercises)) throw new Error(`세션 운동 목록이 올바르지 않아: ${session.id}`);
@@ -390,7 +422,7 @@ export function validateBackup(data) {
   asArray(data.routines).forEach(routine => {
     if (!Array.isArray(routine.items)) throw new Error(`루틴 운동 목록이 올바르지 않아: ${routine.id}`);
   });
-  if (data.schemaVersion === 4) {
+  if (data.schemaVersion >= 4) {
     data.exercises.forEach(exercise => {
       if (!['reps', 'duration'].includes(exercise.trackingMode)) throw new Error(`운동 기록 방식이 올바르지 않아: ${exercise.id}`);
       if (!['external', 'assistance', 'bodyweight', 'none'].includes(exercise.loadMode || 'external')) throw new Error(`운동 중량 방식이 올바르지 않아: ${exercise.id}`);
@@ -400,6 +432,17 @@ export function validateBackup(data) {
     data.sessions.forEach(session => session.exercises.forEach(log => {
       if (!['reps', 'duration'].includes(log.trackingMode)) throw new Error(`세션 운동 기록 방식이 올바르지 않아: ${session.id}`);
       if (!Array.isArray(log.sets)) throw new Error(`세션 세트 목록이 올바르지 않아: ${session.id}`);
+      log.sets.forEach(set => {
+        if (set.setRole !== null && set.setRole !== undefined && !SET_ROLES.includes(set.setRole)) throw new Error(`세트 역할이 올바르지 않아: ${session.id}`);
+      });
+    }));
+  }
+  if (data.schemaVersion === 5) {
+    data.exercises.forEach(exercise => {
+      if (exercise.weightBasis !== null && exercise.weightBasis !== undefined && !WEIGHT_BASES.includes(exercise.weightBasis)) throw new Error(`중량 표시 기준이 올바르지 않아: ${exercise.id}`);
+    });
+    data.sessions.forEach(session => asArray(session.symptoms).forEach(symptom => {
+      if (!String(symptom.location || '').trim() || finiteNumber(symptom.severity, -1) < 0 || finiteNumber(symptom.severity, 11) > 10) throw new Error(`증상 기록이 올바르지 않아: ${session.id}`);
     }));
   }
   return true;

@@ -29,6 +29,7 @@ jobs:
             pr-plus/app.js
             pr-plus/data.mjs
             pr-plus/progression.mjs
+            pr-plus/coach-protocol.mjs
             pr-plus/styles.css
             pr-plus/manifest.webmanifest
             pr-plus/version.json
@@ -50,6 +51,7 @@ jobs:
           node --input-type=module --check < pr-plus/app.js
           node --check pr-plus/data.mjs
           node --check pr-plus/progression.mjs
+          node --check pr-plus/coach-protocol.mjs
           node --check pr-plus/sw.js
 
       - name: Test data migrations and default routines
@@ -57,6 +59,9 @@ jobs:
 
       - name: Test Progressive Overload calculations
         run: node pr-plus/tests/progression.mjs
+
+      - name: Test GPT Coach protocol
+        run: node pr-plus/tests/coach-protocol.mjs
 
       - name: Check web app metadata
         run: |
@@ -86,7 +91,7 @@ jobs:
           fi
 
           changed_files="$(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")"
-          if ! grep -Eq '^pr-plus/(index\.html|app\.js|data\.mjs|progression\.mjs|styles\.css|manifest\.webmanifest|version\.json|sw\.js|icons/)' <<< "$changed_files"; then
+          if ! grep -Eq '^pr-plus/(index\.html|app\.js|data\.mjs|progression\.mjs|coach-protocol\.mjs|styles\.css|manifest\.webmanifest|version\.json|sw\.js|icons/)' <<< "$changed_files"; then
             exit 0
           fi
 
@@ -128,7 +133,7 @@ jobs:
             sleep 1
           done
 
-          for asset in app.js data.mjs progression.mjs styles.css manifest.webmanifest version.json sw.js; do
+          for asset in app.js data.mjs progression.mjs coach-protocol.mjs styles.css manifest.webmanifest version.json sw.js; do
             curl --fail --silent "http://127.0.0.1:8080/pr-plus/$asset" > /dev/null
           done
 

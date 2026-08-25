@@ -4,17 +4,20 @@ PR+는 앱 코드가 업데이트되어도 기존 IndexedDB 기록과 JSON 백�
 
 ## 현재 버전 기준
 
-| 항목 | PR+ v0.3.0 |
+| 항목 | PR+ v0.3.1 |
 | --- | --- |
 | 앱 버전 | `0.3.0` |
 | IndexedDB 이름 | `overload-db` |
-| IndexedDB 버전 | `2` |
-| 데이터/백업 schema | `4` |
+| IndexedDB 버전 | `3` |
+| 데이터/백업 schema | `5` |
 
 - IndexedDB `v1 -> v2`: 기존 store를 유지하고 `routines` store만 추가한다.
+- IndexedDB `v2 -> v3`: 기존 store를 유지하고 GPT 추천 전용 `coachPlans` store만 추가한다.
 - 데이터 `v1 -> v2`: 버전이 없거나 초기 `OVERLOAD` 형식의 배열을 명시적인 schema v2로 정규화한다.
 - 데이터 `v2 -> v3`: 운동 canonical name과 muscle group을 보강하고 `routines`, `schemaVersion`을 추가한다.
 - 데이터 `v3 -> v4`: 운동별 `trackingMode`(`reps`/`duration`), 시간 범위, 중량 방식, Progressive Overload 설정, 즐겨찾기·메모와 세트 `duration` 필드를 추가한다.
+- 데이터 `v4 -> v5`: `coachPlans` 배열, 선택적인 세트 `setRole`, 세션 `symptoms`, 운동 `weightBasis`와 GPT 목표 스냅샷 필드를 추가한다.
+- 기존 v4 세트 역할과 중량 표시 기준은 알 수 없으므로 `null`로 두고 추측하지 않는다. 기존 운동·루틴·세션 ID와 실제 수행값은 그대로 유지한다.
 - v3 Dead Hang은 `duration`과 `10–60초` 목표로 전환한다. 기존 완료 여부는 유지하며 알 수 없는 과거 수행 시간은 추측하지 않고 빈 값으로 둔다.
 - 기존 exercise/session ID와 세트 기록은 유지한다.
 - 새 기본 운동과 루틴은 canonical name 및 고정 ID를 기준으로 누락된 항목만 추가한다.
@@ -31,10 +34,10 @@ PR+는 앱 코드가 업데이트되어도 기존 IndexedDB 기록과 JSON 백�
 각 schema 변경은 오직 다음 인접 버전으로 가는 변환을 하나씩 추가한다.
 
 ```text
-v1 --migrateV1ToV2--> v2 --migrateV2ToV3--> v3 --migrateV3ToV4--> v4
+v1 --migrateV1ToV2--> v2 --migrateV2ToV3--> v3 --migrateV3ToV4--> v4 --migrateV4ToV5--> v5
 ```
 
-v1 데이터를 v4에서 읽을 때 `v1 -> v4`로 건너뛰지 않는다. migration runner가 현재 버전부터 목표 버전까지 각 변환을 순서대로 적용한다. 이 규칙으로 중간 버전에서 생성된 데이터도 같은 경로를 재사용한다.
+v1 데이터를 v5에서 읽을 때 `v1 -> v5`로 건너뛰지 않는다. migration runner가 현재 버전부터 목표 버전까지 각 변환을 순서대로 적용한다. 이 규칙으로 중간 버전에서 생성된 데이터도 같은 경로를 재사용한다.
 
 ## 변환 계약
 
@@ -63,7 +66,8 @@ schema 변경을 포함한 배포에는 최소한 다음 fixture 검사가 필�
 v1 fixture -> v2
 v2 fixture -> v3
 v3 fixture -> v4
-v1 fixture -> v2 -> v3 -> v4
+v4 fixture -> v5
+v1 fixture -> v2 -> v3 -> v4 -> v5
 현재 IndexedDB fixture -> 최신 schema
 OVERLOAD backup fixture -> 최신 schema
 PR+ 구버전 backup fixture -> 최신 schema
