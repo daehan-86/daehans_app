@@ -1,9 +1,9 @@
 const CACHE_PREFIX = 'pr-plus-';
 const LEGACY_AUTO_UPDATE_CACHE = 'pr-plus-v0.1.0';
-const RELEASE_ID = '0.3.0-r1';
+const RELEASE_ID = '0.3.1-r1';
 const CACHE = `pr-plus-${RELEASE_ID}`;
 const ASSETS = [
-  './', './index.html', './styles.css', './app.js', './data.mjs', './progression.mjs', './version.json', './manifest.webmanifest',
+  './', './index.html', './styles.css', './app.js', './data.mjs', './progression.mjs', './coach-protocol.mjs', './version.json', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'
 ];
 self.addEventListener('install', event => {

@@ -23,7 +23,7 @@
         <h1>PR+</h1>
       </div>
       <div class="topbar-actions">
-        <button id="versionBtn" class="version-pill" aria-label="업데이트 확인">v0.3.0</button>
+        <button id="versionBtn" class="version-pill" aria-label="업데이트 확인">v0.3.1</button>
         <button id="installBtn" class="icon-btn" aria-label="앱 설치 안내">＋</button>
       </div>
     </header>
@@ -80,6 +80,9 @@
         <label>중량 방식
           <select id="customLoadMode" class="text-input"><option value="external">외부 중량</option><option value="assistance">보조 중량</option><option value="bodyweight">맨몸 / 추가 중량</option><option value="none">중량 없음</option></select>
         </label>
+        <label>중량 표시 기준
+          <select id="customWeightBasis" class="text-input"><option value="">미지정</option><option value="total">총 중량</option><option value="per_hand">한 손 기준</option><option value="per_side">한쪽 기준</option><option value="machine_stack">머신 스택</option></select>
+        </label>
         <label id="customTargetRangeLabel">반복 범위<input id="customTargetRange" class="text-input" value="8-12" inputmode="numeric" /></label>
       </div>
       <button id="createExerciseBtn" type="button" class="primary-btn wide">운동 생성</button>
@@ -112,13 +115,28 @@
     <div class="sheet feedback-sheet">
       <div class="sheet-handle"></div>
       <div class="sheet-title-row">
-        <div><p class="eyebrow">GPT FEEDBACK</p><h2>운동 기록 프롬프트</h2></div>
+        <div><p class="eyebrow">GPT COACH · PROTOCOL 1.1</p><h2>GPT 코치 요청문</h2></div>
         <button id="closeFeedbackDialog" class="ghost-btn">닫기</button>
       </div>
       <p id="feedbackPromptRange" class="muted small"></p>
-      <textarea id="feedbackPrompt" class="text-input feedback-prompt" readonly aria-label="GPT 상담용 운동 기록"></textarea>
+      <textarea id="feedbackPrompt" class="text-input feedback-prompt" readonly aria-label="GPT 코치용 운동 기록"></textarea>
       <p class="feedback-privacy">이 텍스트는 기기 안에서만 만들어져. 복사하기 전에는 어디에도 전송되지 않아.</p>
       <button id="copyFeedbackPrompt" class="primary-btn wide">텍스트 복사</button>
+    </div>
+  </dialog>
+
+  <dialog id="coachImportDialog" class="sheet-dialog">
+    <div class="sheet coach-import-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title-row">
+        <div><p class="eyebrow">GPT COACH · PROTOCOL 1.1</p><h2>GPT 추천 붙여넣기</h2></div>
+        <button id="closeCoachImportDialog" class="ghost-btn">닫기</button>
+      </div>
+      <p class="muted small">GPT 답변의 PRPLUS_COACH_PLAN 시작 표식부터 종료 표식까지 붙여넣어.</p>
+      <textarea id="coachPlanInput" class="text-input coach-plan-input" aria-label="GPT 추천 계획" placeholder="<<<PRPLUS_COACH_PLAN>>>&#10;{ ... }&#10;<<<END_PRPLUS_COACH_PLAN>>>"></textarea>
+      <button id="validateCoachPlan" class="secondary-btn wide">계획 검증</button>
+      <div id="coachPlanPreview" class="coach-plan-preview"></div>
+      <button id="saveCoachPlan" class="primary-btn wide hidden">검증한 추천 저장</button>
     </div>
   </dialog>
 

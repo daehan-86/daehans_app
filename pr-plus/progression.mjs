@@ -15,7 +15,7 @@ export function metricOfSet(set, config) {
   return trackingModeOf(config) === 'duration' ? number(set?.duration) : number(set?.reps);
 }
 
-const measurableSets = (log, config) => completedSets(log).filter(set => metricOfSet(set, config) > 0);
+const measurableSets = (log, config) => completedSets(log).filter(set => set.setRole !== 'warmup' && metricOfSet(set, config) > 0);
 
 export function summarizeExerciseLog(log, config = log) {
   const sets = measurableSets(log, config);

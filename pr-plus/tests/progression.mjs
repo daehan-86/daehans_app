@@ -36,6 +36,10 @@ assert(durationTarget.kind === 'duration' && durationTarget.sets[0].metric === 2
 assert(buildNextTarget({ sets: [{ duration: '', done: true }] }, durationConfig).kind === 'baseline', '시간이 없던 v3 완료 기록으로 임의 목표를 추측하면 안 된다.');
 const durationSummary = summarizeExerciseLog({ sets: [{ duration: 25, done: true }] }, durationConfig);
 assert(durationSummary.bestMetric === 25 && durationSummary.volume === 0, '시간 운동을 중량 볼륨으로 계산하면 안 된다.');
+const roleSummary = summarizeExerciseLog({ sets: [
+  { ...done(40, 6, 5), setRole: 'warmup' }, { ...done(80, 8), setRole: 'working' }, { ...done(70, 10), setRole: 'backoff' }
+] }, repConfig);
+assert(roleSummary.sets === 2 && roleSummary.volume === 1340, 'progression 분석은 warmup을 제외하고 working/backoff 세트를 사용해야 한다.');
 
 const improved = compareExerciseLogs({ sets: [done(80, 9), done(80, 8), done(80, 7)] }, { sets: [done(80, 8), done(80, 8), done(80, 7)] }, repConfig);
 assert(improved.status === 'improved', '같은 중량의 반복 증가를 발전으로 판정해야 한다.');
