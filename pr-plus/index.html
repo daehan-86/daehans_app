@@ -23,7 +23,7 @@
         <h1>PR+</h1>
       </div>
       <div class="topbar-actions">
-        <button id="versionBtn" class="version-pill" aria-label="업데이트 확인">v0.2.1</button>
+        <button id="versionBtn" class="version-pill" aria-label="업데이트 확인">v0.3.0</button>
         <button id="installBtn" class="icon-btn" aria-label="앱 설치 안내">＋</button>
       </div>
     </header>
@@ -105,6 +105,20 @@
         <button id="closeSessionEditDialog" class="ghost-btn">닫기</button>
       </div>
       <div id="sessionEditContent"></div>
+    </div>
+  </dialog>
+
+  <dialog id="feedbackDialog" class="sheet-dialog">
+    <div class="sheet feedback-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title-row">
+        <div><p class="eyebrow">GPT FEEDBACK</p><h2>운동 기록 프롬프트</h2></div>
+        <button id="closeFeedbackDialog" class="ghost-btn">닫기</button>
+      </div>
+      <p id="feedbackPromptRange" class="muted small"></p>
+      <textarea id="feedbackPrompt" class="text-input feedback-prompt" readonly aria-label="GPT 상담용 운동 기록"></textarea>
+      <p class="feedback-privacy">이 텍스트는 기기 안에서만 만들어져. 복사하기 전에는 어디에도 전송되지 않아.</p>
+      <button id="copyFeedbackPrompt" class="primary-btn wide">텍스트 복사</button>
     </div>
   </dialog>
 

@@ -17,7 +17,8 @@ const state = {
   latestRelease: null, applyingUpdate: false, lastUpdateCheck: 0,
   detailExerciseId: null, restTimerEnd: 0, restTimerInterval: null,
   durationTimer: null, durationTimerInterval: null, activeTrainingDay: null,
-  trainingDayTimer: null, historyLimit: 31, editingSession: null, editingSessionIsNew: false
+  trainingDayTimer: null, historyLimit: 31, editingSession: null, editingSessionIsNew: false,
+  editTodayOrder: false, historyPeriod: 'all', historyAnchor: null, historyExerciseId: null
 };
 const app = document.querySelector('#app');
 
@@ -278,17 +279,18 @@ function renderToday() {
   const dateLabel = `${date.getMonth() + 1}월 ${date.getDate()}일 ${['일', '월', '화', '수', '목', '금', '토'][date.getDay()]}요일`;
   let html = `<div class="section-head"><div><h2>오늘의 훈련</h2><p>운동일은 오전 7시에 바뀐다.</p></div><div class="date-chip">${dateLabel}</div></div>`;
   if (!session || !session.exercises.length) {
-    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.2.1 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
+    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.3 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
     html += `<div class="routine-start-grid">${state.routines.map(routineStartCard).join('')}</div>`;
     html += `<button class="secondary-btn wide manual-start" data-action="add-exercise">루틴 없이 운동 추가</button>`;
   } else {
     const routineLabel = session.routineName ? `<span class="badge pr-badge">${esc(session.routineName)}</span>` : '';
-    html += `<div class="session-title-row">${routineLabel}${session.finishedAt ? '<span class="badge">완료됨</span>' : '<span class="badge">기록 중</span>'}</div>`;
+    html += `<div class="session-title-row"><div>${routineLabel}${session.finishedAt ? '<span class="badge">완료됨</span>' : '<span class="badge">기록 중</span>'}</div><button class="secondary-btn compact-btn ${state.editTodayOrder ? 'active-edit-btn' : ''}" data-action="toggle-session-edit">${state.editTodayOrder ? '편집 완료' : '운동 순서 편집'}</button></div>`;
     html += `<div class="stats-grid"><div class="stat-card"><span>오늘 완료 세트</span><b>${hardSets(session)}</b></div><div class="stat-card"><span>총 볼륨</span><b>${Math.round(sessionVolume(session)).toLocaleString()}<small> kg</small></b></div></div>`;
     html += `<div class="baseline-banner"><b>Progressive Overload</b><span>LAST와 NEXT를 참고하고, 오늘 실제 수행값과 RIR을 기록해.</span></div>`;
+    if (state.editTodayOrder) html += '<div class="session-edit-banner">화살표로 순서를 바꾸거나 이 세션에서 운동을 삭제할 수 있어. 루틴 원본은 바뀌지 않아.</div>';
     session.exercises.forEach((log, index) => { html += exerciseCard(log, index); });
     html += `<label class="session-note"><span>오늘 메모</span><textarea class="text-input" data-session-note placeholder="컨디션, 자세, 통증 없이 느낀 점…">${esc(session.notes || '')}</textarea></label>`;
-    html += `<div class="session-actions"><button class="secondary-btn wide" data-action="add-exercise">＋ 운동 추가</button><button class="primary-btn wide" data-action="finish-session">오늘 운동 완료</button></div>`;
+    html += `<div class="session-actions"><button class="secondary-btn wide" data-action="add-exercise">＋ 운동 추가</button><button class="secondary-btn wide" data-action="feedback-today">GPT 피드백용 텍스트</button><button class="primary-btn wide" data-action="finish-session">오늘 운동 완료</button></div>`;
   }
   app.innerHTML = html;
 }
@@ -335,6 +337,7 @@ function exerciseCard(log, exerciseIndex) {
   const next = buildNextTarget(state.currentSession?.finishedAt && completedSets(log).length ? log : previous, config);
   const status = completedSets(log).length ? `<span class="performance-badge ${comparison.status}">${esc(comparison.label)}</span>` : '';
   const recordBadges = records.map(record => `<span class="badge pr-badge">${esc(record)}</span>`).join('');
+  const orderControls = state.editTodayOrder ? `<div class="session-order-bar"><span>오늘 운동 ${exerciseIndex + 1}/${state.currentSession.exercises.length}</span><div><button data-action="move-session-exercise" data-direction="up" data-eidx="${exerciseIndex}" ${exerciseIndex === 0 ? 'disabled' : ''} aria-label="위로 이동">↑ 위로</button><button data-action="move-session-exercise" data-direction="down" data-eidx="${exerciseIndex}" ${exerciseIndex === state.currentSession.exercises.length - 1 ? 'disabled' : ''} aria-label="아래로 이동">↓ 아래로</button><button class="remove-session-exercise" data-action="remove-exercise" data-eidx="${exerciseIndex}">삭제</button></div></div>` : '';
   const rows = isDuration(config) ? log.sets.map((set, setIndex) => {
     const timerActive = state.durationTimer?.exerciseIndex === exerciseIndex && state.durationTimer?.setIndex === setIndex;
     return `<tr>
@@ -343,6 +346,7 @@ function exerciseCard(log, exerciseIndex) {
       <td><input class="set-input" inputmode="numeric" data-field="duration" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.duration ?? '')}" placeholder="초" aria-label="${setIndex + 1}세트 유지 시간"></td>
       <td><button class="timer-set-btn ${timerActive ? 'active' : ''}" data-action="toggle-duration-timer" data-eidx="${exerciseIndex}" data-sidx="${setIndex}">${timerActive ? '정지' : '시작'}</button></td>
       <td><input class="done-check" type="checkbox" data-field="done" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" ${set.done ? 'checked' : ''} aria-label="${setIndex + 1}세트 완료"></td>
+      <td><button class="set-remove-btn" data-action="remove-set" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" aria-label="${setIndex + 1}세트 삭제">×</button></td>
     </tr>`;
   }).join('') : log.sets.map((set, setIndex) => `<tr>
       <td class="set-num">${setIndex + 1}</td>
@@ -350,12 +354,14 @@ function exerciseCard(log, exerciseIndex) {
       <td><input class="set-input" inputmode="numeric" data-field="reps" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.reps ?? '')}" placeholder="회" aria-label="${setIndex + 1}세트 반복수"></td>
       <td><input class="set-input" inputmode="decimal" data-field="rir" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" value="${esc(set.rir ?? '')}" placeholder="RIR" aria-label="${setIndex + 1}세트 RIR"></td>
       <td><input class="done-check" type="checkbox" data-field="done" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" ${set.done ? 'checked' : ''} aria-label="${setIndex + 1}세트 완료"></td>
+      <td><button class="set-remove-btn" data-action="remove-set" data-eidx="${exerciseIndex}" data-sidx="${setIndex}" aria-label="${setIndex + 1}세트 삭제">×</button></td>
     </tr>`).join('');
   const headers = isDuration(config)
-    ? `<tr><th>SET</th>${config.loadMode === 'none' ? '' : `<th>${loadHeader(config)}</th>`}<th>SEC</th><th>TIMER</th><th>✓</th></tr>`
-    : `<tr><th>SET</th>${config.loadMode === 'none' ? '' : `<th>${loadHeader(config)}</th>`}<th>REPS</th><th>RIR</th><th>✓</th></tr>`;
+    ? `<tr><th>SET</th>${config.loadMode === 'none' ? '' : `<th>${loadHeader(config)}</th>`}<th>SEC</th><th>TIMER</th><th>✓</th><th></th></tr>`
+    : `<tr><th>SET</th>${config.loadMode === 'none' ? '' : `<th>${loadHeader(config)}</th>`}<th>REPS</th><th>RIR</th><th>✓</th><th></th></tr>`;
   return `<section class="card exercise-card">
-    <div class="exercise-head"><div>${isWarmupLog(log) ? '<p class="eyebrow">WARMUP / MOBILITY</p>' : ''}<h3>${esc(exercise.name)}</h3><div class="exercise-display-name">${esc(exercise.displayName || '')}</div><div class="exercise-meta">${esc(muscleLabel(exercise.muscleGroup))} · 목표 ${targetText(config)}${log.optional ? ' · 선택' : ''}</div></div><div class="exercise-head-actions">${status}<button class="menu-btn" data-action="remove-exercise" data-eidx="${exerciseIndex}" aria-label="운동 삭제">×</button></div></div>
+    <div class="exercise-head"><div>${isWarmupLog(log) ? '<p class="eyebrow">WARMUP / MOBILITY</p>' : ''}<h3>${esc(exercise.name)}</h3><div class="exercise-display-name">${esc(exercise.displayName || '')}</div><div class="exercise-meta">${esc(muscleLabel(exercise.muscleGroup))} · 목표 ${targetText(config)}${log.optional ? ' · 선택' : ''}</div></div><div class="exercise-head-actions">${status}</div></div>
+    ${orderControls}
     <div class="last-performance"><b>LAST</b><span>${esc(previousText)}</span></div>
     <div class="next-target"><div><b>NEXT</b><strong>${esc(formatNextTarget(next, config))}</strong></div><span>${esc(next.message)}</span></div>
     ${recordBadges ? `<div class="record-row">${recordBadges}</div>` : ''}
@@ -393,22 +399,51 @@ function routineCard(routine) {
 }
 
 function renderHistory() {
-  const timeline = historyTimeline();
-  const visible = timeline.slice(0, state.historyLimit);
+  if (!state.historyAnchor) state.historyAnchor = todayKey();
+  const range = historyPeriodRange();
+  const timeline = historyTimeline(range);
+  const visible = state.historyPeriod === 'all' ? timeline.slice(0, state.historyLimit) : timeline;
   const trainingDays = timeline.filter(item => item.session?.exercises?.some(log => completedSets(log).length)).length;
   const restDays = timeline.filter(item => !item.session).length;
-  app.innerHTML = `<div class="section-head"><div><h2>운동 기록</h2><p>${trainingDays}일 훈련 · ${restDays}일 휴식</p></div></div>` +
-    progressMarkup() +
-    `<div class="subsection-head"><h3>전체 기록</h3><p>첫 기록부터 오늘까지, 미등록일은 휴식으로 표시해.</p></div>` +
+  app.innerHTML = `<div class="section-head"><div><h2>운동 기록</h2><p>${trainingDays}일 훈련 · ${restDays}일 휴식</p></div><button class="primary-btn compact-btn" data-action="feedback-history">GPT 상담용 요약</button></div>` +
+    historyPeriodControls(range) + progressMarkup(range) + exerciseProgressMarkup() +
+    `<div class="subsection-head"><h3>${esc(range.label)} 기록</h3><p>미등록일은 휴식으로 표시하고, 휴식일에도 과거 기록을 추가할 수 있어.</p></div>` +
     (timeline.length ? `<div class="card history-card">${visible.map(item => item.session ? historyItem(item.session) : restDayItem(item.date)).join('')}</div>${visible.length < timeline.length ? `<button class="secondary-btn wide history-more" data-action="load-more-history">이전 기록 더 보기 (${timeline.length - visible.length}일)</button>` : '<p class="history-end muted small">첫 기록까지 모두 불러왔어.</p>'}` : '<div class="card empty-state"><h3>아직 기록이 없어</h3><p>첫 운동을 시작하면 이후 미기록일이 휴식으로 정리돼.</p></div>');
 }
-function historyTimeline() {
-  const validSessions = state.sessions.filter(session => /^\d{4}-\d{2}-\d{2}$/.test(session.date) && session.date <= todayKey());
-  if (!validSessions.length) return [];
+function historyPeriodRange(period = state.historyPeriod, anchorKey = state.historyAnchor || todayKey()) {
+  const today = todayKey(); const anchor = dateFromKey(anchorKey > today ? today : anchorKey);
+  const validDates = state.sessions.map(session => session.date).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date) && date <= today);
+  if (period === 'all') return { from: validDates.length ? validDates.sort()[0] : today, to: today, label: '전체 기간', unit: 'month' };
+  if (period === 'day') { const key = localDateKey(anchor); return { from: key, to: key, label: `${anchor.getFullYear()}년 ${anchor.getMonth() + 1}월 ${anchor.getDate()}일`, unit: 'day' }; }
+  if (period === 'week') {
+    const start = new Date(anchor); start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+    const end = new Date(start); end.setDate(end.getDate() + 6);
+    return { from: localDateKey(start), to: localDateKey(end) > today ? today : localDateKey(end), label: `${start.getMonth() + 1}/${start.getDate()}–${end.getMonth() + 1}/${end.getDate()}`, unit: 'day' };
+  }
+  const start = new Date(anchor.getFullYear(), anchor.getMonth(), 1, 12); const end = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0, 12);
+  return { from: localDateKey(start), to: localDateKey(end) > today ? today : localDateKey(end), label: `${anchor.getFullYear()}년 ${anchor.getMonth() + 1}월`, unit: 'day' };
+}
+function historyPeriodControls(range) {
+  const options = [['all', '전체'], ['day', '일'], ['week', '주'], ['month', '월']];
+  const navigator = state.historyPeriod === 'all' ? '' : `<div class="period-navigator"><button class="secondary-btn compact-btn" data-action="shift-history-period" data-direction="prev" aria-label="이전 기간">‹</button><b>${esc(range.label)}</b><button class="secondary-btn compact-btn" data-action="shift-history-period" data-direction="next" ${range.to >= todayKey() ? 'disabled' : ''} aria-label="다음 기간">›</button></div>`;
+  return `<div class="history-period-card"><div class="period-tabs">${options.map(([key, label]) => `<button class="filter-chip ${state.historyPeriod === key ? 'active' : ''}" data-action="history-period" data-period="${key}">${label}</button>`).join('')}</div>${navigator}</div>`;
+}
+function shiftHistoryPeriod(direction) {
+  const amount = direction === 'prev' ? -1 : 1; const date = dateFromKey(state.historyAnchor || todayKey());
+  if (state.historyPeriod === 'day') date.setDate(date.getDate() + amount);
+  if (state.historyPeriod === 'week') date.setDate(date.getDate() + amount * 7);
+  if (state.historyPeriod === 'month') { date.setDate(1); date.setMonth(date.getMonth() + amount); }
+  state.historyAnchor = localDateKey(date) > todayKey() ? todayKey() : localDateKey(date); state.historyLimit = 31;
+}
+function sessionsInRange(range, completedOnly = false) {
+  return state.sessions.filter(session => session.date >= range.from && session.date <= range.to && (!completedOnly || session.exercises?.some(log => completedSets(log).length)));
+}
+function historyTimeline(range = historyPeriodRange()) {
+  const validSessions = sessionsInRange(range).filter(session => /^\d{4}-\d{2}-\d{2}$/.test(session.date));
+  if (state.historyPeriod === 'all' && !validSessions.length) return [];
   const byDate = new Map(validSessions.map(session => [session.date, session]));
-  const firstDate = validSessions.reduce((earliest, session) => session.date < earliest ? session.date : earliest, validSessions[0].date);
   const entries = [];
-  for (let date = todayKey(); date >= firstDate; date = shiftDateKey(date, -1)) entries.push({ date, session: byDate.get(date) || null });
+  for (let date = range.to; date >= range.from; date = shiftDateKey(date, -1)) entries.push({ date, session: byDate.get(date) || null });
   return entries;
 }
 function restDayItem(dateKey) {
@@ -502,37 +537,27 @@ function lineChartMarkup(values, suffix = '') {
   }).join(' ');
   return `<svg class="line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${min}${suffix}에서 ${max}${suffix} 범위의 변화"><polyline points="${points}"></polyline>${points.split(' ').map(point => { const [x, y] = point.split(','); return `<circle cx="${x}" cy="${y}" r="3"></circle>`; }).join('')}</svg><div class="chart-range"><span>${formatKg(min)}${suffix}</span><span>${formatKg(max)}${suffix}</span></div>`;
 }
-function progressMarkup() {
-  const completed = state.sessions.filter(session => session.exercises?.some(log => completedSets(log).length));
-  const last7 = Array.from({ length: 7 }, (_, index) => {
-    const key = shiftDateKey(todayKey(), -(6 - index)); const date = dateFromKey(key);
-    return { label: ['일', '월', '화', '수', '목', '금', '토'][date.getDay()], volume: completed.filter(session => session.date === key).reduce((sum, session) => sum + sessionVolume(session), 0) };
-  });
-  const maxVolume = Math.max(1, ...last7.map(item => item.volume));
+function progressMarkup(range = historyPeriodRange()) {
+  const completed = sessionsInRange(range, true);
   const muscleSets = {};
   const muscleVolumes = {};
-  const cutoff = dateFromKey(shiftDateKey(todayKey(), -6));
-  completed.filter(session => new Date(`${session.date}T12:00:00`) >= cutoff).forEach(session => session.exercises.forEach(log => {
+  completed.forEach(session => session.exercises.forEach(log => {
     const exercise = exerciseById(log.exerciseId);
     if (exercise && !isWarmupLog(log)) {
       muscleSets[exercise.muscleGroup] = (muscleSets[exercise.muscleGroup] || 0) + log.sets.filter(set => set.done).length;
       muscleVolumes[exercise.muscleGroup] = (muscleVolumes[exercise.muscleGroup] || 0) + logVolume(log);
     }
   }));
-  const topExercises = state.exercises.map(exercise => ({ exercise, e1rm: bestE1RMForExercise(exercise.id) })).filter(item => item.e1rm > 0).sort((a, b) => b.e1rm - a.e1rm).slice(0, 5);
-  const cutoff28 = dateFromKey(shiftDateKey(todayKey(), -27));
-  const last28 = completed.filter(session => new Date(`${session.date}T12:00:00`) >= cutoff28);
-  const bodyWeights = [...settingValue('bodyWeightEntries', [])].sort((a, b) => a.date.localeCompare(b.date)).slice(-12);
-  const todayWeight = bodyWeights.find(entry => entry.date === todayKey())?.weight || '';
-  const weeks = weeklyTrend(completed, 8);
-  const current28 = periodTotals(completed, shiftDateKey(todayKey(), -27), todayKey());
-  const previous28 = periodTotals(completed, shiftDateKey(todayKey(), -55), shiftDateKey(todayKey(), -28));
-  return `<div class="subsection-head"><h3>전체 성장 추세</h3><p>최근 8주 흐름과 직전 4주 대비 변화를 보여줘.</p></div>
-    <div class="growth-grid">${growthMetric('훈련일', current28.days, previous28.days, '일')}${growthMetric('Hard sets', current28.sets, previous28.sets, '세트')}${growthMetric('볼륨', Math.round(current28.volume), Math.round(previous28.volume), 'kg')}</div>
-    ${weeklyTrendCard('WEEKLY VOLUME', weeks, 'volume', 'kg')}${weeklyTrendCard('WEEKLY HARD SETS', weeks, 'sets', '세트')}${weeklyTrendCard('WEEKLY TRAINING DAYS', weeks, 'days', '일')}
-    <div class="stats-grid"><div class="stat-card"><span>최근 28일 훈련</span><b>${last28.length}<small>회</small></b></div><div class="stat-card"><span>주간 평균 빈도</span><b>${formatKg(last28.length / 4)}<small>회</small></b></div></div>
-    <div class="card"><p class="eyebrow">LAST 7 DAYS · VOLUME</p><div class="chart">${last7.map(item => `<div class="chart-col"><div class="chart-bar-wrap"><div class="chart-bar" style="height:${Math.max(2, item.volume / maxVolume * 100)}%"></div></div><div class="chart-label">${item.label}</div></div>`).join('')}</div></div>
-    <div class="card"><p class="eyebrow">WEEKLY HARD SETS · MUSCLE VOLUME</p>${Object.keys(muscleSets).length ? Object.entries(muscleSets).sort((a, b) => b[1] - a[1]).map(([muscle, value]) => `<div class="progress-row"><div class="progress-row-head"><span>${esc(muscleLabel(muscle))}</span><b>${value}세트 · ${Math.round(muscleVolumes[muscle] || 0).toLocaleString()}kg</b></div><div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, value / 14 * 100)}%"></div></div></div>`).join('') : '<p class="muted small">최근 7일 완료 세트가 없어.</p>'}</div>
+  const topExercises = state.exercises.map(exercise => ({ exercise, e1rm: bestE1RMInSessions(exercise.id, completed) })).filter(item => item.e1rm > 0).sort((a, b) => b.e1rm - a.e1rm).slice(0, 5);
+  const bodyWeights = [...settingValue('bodyWeightEntries', [])].filter(entry => entry.date >= range.from && entry.date <= range.to).sort((a, b) => a.date.localeCompare(b.date));
+  const todayWeight = settingValue('bodyWeightEntries', []).find(entry => entry.date === todayKey())?.weight || '';
+  const totals = periodTotals(completed, range.from, range.to); const previous = previousPeriodTotals(range);
+  const buckets = periodBuckets(range, completed);
+  const comparisonLabel = state.historyPeriod === 'all' ? '전체 누적' : '직전 같은 기간 대비';
+  return `<div class="subsection-head"><h3>${esc(range.label)} 성장 지표</h3><p>위에서 고른 기간에 맞춰 목록과 모든 합계를 다시 계산해.</p></div>
+    <div class="growth-grid">${growthMetric('훈련일', totals.days, previous?.days, '일', comparisonLabel)}${growthMetric('Hard sets', totals.sets, previous?.sets, '세트', comparisonLabel)}${growthMetric('볼륨', Math.round(totals.volume), previous ? Math.round(previous.volume) : null, 'kg', comparisonLabel)}</div>
+    ${periodTrendCard('VOLUME TREND', buckets, 'volume', 'kg')}${periodTrendCard('HARD SET TREND', buckets, 'sets', '세트')}${periodTrendCard('TRAINING DAY TREND', buckets, 'days', '일')}
+    <div class="card"><p class="eyebrow">MUSCLE · SETS / VOLUME</p>${Object.keys(muscleSets).length ? Object.entries(muscleSets).sort((a, b) => b[1] - a[1]).map(([muscle, value]) => `<div class="progress-row"><div class="progress-row-head"><span>${esc(muscleLabel(muscle))}</span><b>${value}세트 · ${Math.round(muscleVolumes[muscle] || 0).toLocaleString()}kg</b></div><div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, value / Math.max(1, totals.sets) * 100)}%"></div></div></div>`).join('') : '<p class="muted small">선택 기간에 완료 세트가 없어.</p>'}</div>
     <div class="card"><p class="eyebrow">ESTIMATED 1RM</p>${topExercises.length ? topExercises.map(item => `<button class="metric-row" data-action="exercise-detail" data-exercise-id="${esc(item.exercise.id)}"><span><b>${esc(item.exercise.name)}</b><small>최고 세트 기반 Epley 추정</small></span><strong>${formatKg(item.e1rm)} kg</strong></button>`).join('') : '<p class="muted small">운동 기록을 입력하면 표시된다.</p>'}</div>
     <div class="card body-weight-card"><div class="body-weight-head"><div><p class="eyebrow">BODY WEIGHT</p><h3>체중 변화</h3></div><div class="body-weight-input"><input id="bodyWeightInput" class="set-input" inputmode="decimal" value="${esc(todayWeight)}" placeholder="kg"><button class="secondary-btn compact-btn" data-action="save-body-weight">저장</button></div></div>${lineChartMarkup(bodyWeights.map(entry => num(entry.weight)), 'kg')}</div>`;
 }
@@ -541,25 +566,123 @@ function periodTotals(sessions, from, to) {
   const period = sessions.filter(session => session.date >= from && session.date <= to);
   return { days: new Set(period.map(session => session.date)).size, sets: period.reduce((sum, session) => sum + hardSets(session), 0), volume: period.reduce((sum, session) => sum + sessionVolume(session), 0) };
 }
-function weeklyTrend(sessions, count) {
-  const today = dateFromKey(todayKey()); const mondayOffset = (today.getDay() + 6) % 7;
-  today.setDate(today.getDate() - mondayOffset);
-  return Array.from({ length: count }, (_, index) => {
-    const start = new Date(today); start.setDate(start.getDate() - (count - 1 - index) * 7);
-    const startKey = localDateKey(start); const end = new Date(start); end.setDate(end.getDate() + 6); const endKey = localDateKey(end);
-    const totals = periodTotals(sessions, startKey, endKey);
-    return { ...totals, label: `${start.getMonth() + 1}/${start.getDate()}` };
-  });
+function previousPeriodTotals(range) {
+  if (state.historyPeriod === 'all') return null;
+  const length = Math.round((dateFromKey(range.to) - dateFromKey(range.from)) / 86400000) + 1;
+  const to = shiftDateKey(range.from, -1); const from = shiftDateKey(to, -(length - 1));
+  return periodTotals(state.sessions.filter(session => session.exercises?.some(log => completedSets(log).length)), from, to);
 }
-function growthMetric(label, current, previous, suffix) {
-  const change = previous > 0 ? Math.round((current - previous) / previous * 100) : current > 0 ? null : 0;
-  const changeText = change === null ? '새 기록' : `${change > 0 ? '+' : ''}${change}%`;
-  const tone = change === null || change > 0 ? 'up' : change < 0 ? 'down' : 'flat';
-  return `<div class="growth-card"><span>${label}</span><b>${Number(current).toLocaleString()}<small>${suffix}</small></b><em class="${tone}">${changeText}</em><small>직전 4주 대비</small></div>`;
+function periodBuckets(range, sessions) {
+  if (state.historyPeriod !== 'all') {
+    const buckets = [];
+    for (let date = range.from; date <= range.to; date = shiftDateKey(date, 1)) {
+      const day = dateFromKey(date); buckets.push({ ...periodTotals(sessions, date, date), label: `${day.getMonth() + 1}/${day.getDate()}` });
+    }
+    return buckets;
+  }
+  const buckets = []; const cursor = dateFromKey(range.from); cursor.setDate(1); const last = dateFromKey(range.to);
+  while (cursor <= last) {
+    const start = localDateKey(cursor); const endDate = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 12); const end = localDateKey(endDate) > range.to ? range.to : localDateKey(endDate);
+    buckets.push({ ...periodTotals(sessions, start, end), label: `${cursor.getFullYear()}.${cursor.getMonth() + 1}` }); cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return buckets;
 }
-function weeklyTrendCard(title, weeks, field, suffix) {
-  const values = weeks.map(week => num(week[field])); const latest = values.at(-1) || 0;
-  return `<div class="card trend-card"><div class="trend-head"><p class="eyebrow">${title}</p><b>${formatKg(latest)} ${suffix}</b></div>${lineChartMarkup(values, suffix)}<div class="chart-range"><span>${weeks[0]?.label || ''}</span><span>${weeks.at(-1)?.label || ''}</span></div></div>`;
+function bestE1RMInSessions(exerciseId, sessions) {
+  const exercise = exerciseById(exerciseId);
+  if (!exercise || isDuration(exercise) || ['assistance', 'none'].includes(exercise.loadMode)) return 0;
+  return sessions.reduce((best, session) => {
+    const estimates = (session.exercises || []).filter(log => log.exerciseId === exerciseId).flatMap(log => completedSets(log).map(set => epley(num(set.weight), num(set.reps))));
+    return Math.max(best, ...estimates, 0);
+  }, 0);
+}
+function growthMetric(label, current, previous, suffix, comparisonLabel) {
+  const hasComparison = previous !== null && previous !== undefined;
+  const change = hasComparison && previous > 0 ? Math.round((current - previous) / previous * 100) : hasComparison && current > 0 ? null : 0;
+  const changeText = !hasComparison ? '누적' : change === null ? '새 기록' : `${change > 0 ? '+' : ''}${change}%`;
+  const tone = !hasComparison || change === null || change > 0 ? 'up' : change < 0 ? 'down' : 'flat';
+  return `<div class="growth-card"><span>${label}</span><b>${Number(current).toLocaleString()}<small>${suffix}</small></b><em class="${tone}">${changeText}</em><small>${comparisonLabel}</small></div>`;
+}
+function periodTrendCard(title, buckets, field, suffix) {
+  const values = buckets.map(bucket => num(bucket[field])); const total = values.reduce((sum, value) => sum + value, 0);
+  return `<div class="card trend-card"><div class="trend-head"><p class="eyebrow">${title}</p><b>${formatKg(total)} ${suffix}</b></div>${lineChartMarkup(values, suffix)}<div class="chart-range"><span>${buckets[0]?.label || ''}</span><span>${buckets.at(-1)?.label || ''}</span></div></div>`;
+}
+
+function seriesCard(title, pairs, suffix, hint = '') {
+  if (!pairs.length) return '';
+  return `<div class="card trend-card"><div class="trend-head"><div><p class="eyebrow">${title}</p>${hint ? `<small>${esc(hint)}</small>` : ''}</div><b>${formatKg(pairs.at(-1).value)} ${suffix}</b></div>${lineChartMarkup(pairs.map(pair => pair.value), suffix)}<div class="chart-range"><span>${esc(pairs[0].date)}</span><span>${esc(pairs.at(-1).date)}</span></div></div>`;
+}
+function exerciseProgressMarkup() {
+  const available = state.exercises.map(exercise => ({ exercise, count: exerciseHistory(exercise.id).length })).filter(item => item.count).sort((a, b) => b.count - a.count || a.exercise.name.localeCompare(b.exercise.name));
+  if (!available.length) return `<div class="subsection-head"><h3>운동별 변화</h3><p>완료 기록이 쌓이면 종목별 중량과 횟수 흐름이 표시돼.</p></div>`;
+  if (!available.some(item => item.exercise.id === state.historyExerciseId)) state.historyExerciseId = available[0].exercise.id;
+  const exercise = exerciseById(state.historyExerciseId); const history = exerciseHistory(state.historyExerciseId);
+  const items = history.map(({ session, log }) => ({ date: session.date, summary: summarizeExerciseLog(log, { ...exercise, ...log }) })).filter(item => item.summary.sets);
+  const duration = isDuration(exercise);
+  const reps = items.map(item => ({ date: item.date, value: item.summary.bestMetric }));
+  const loads = items.map(item => ({ date: item.date, value: exercise.loadMode === 'assistance' ? item.summary.minPositiveLoad : item.summary.maxLoad })).filter(item => item.value > 0);
+  const e1rms = items.map(item => ({ date: item.date, value: item.summary.bestE1RM })).filter(item => item.value > 0 && !['assistance', 'none'].includes(exercise.loadMode));
+  const charts = duration ? seriesCard('HOLD TIME', reps, '초') : `${seriesCard('BEST REPS', reps, '회')}${seriesCard(exercise.loadMode === 'assistance' ? 'ASSISTANCE LOAD' : 'WORKING LOAD', loads, 'kg', exercise.loadMode === 'assistance' ? '낮아질수록 더 강한 수행' : '')}${seriesCard('ESTIMATED 1RM', e1rms, 'kg', 'Epley 추정치')}`;
+  return `<div class="subsection-head"><h3>운동별 변화</h3><p>선택 기간과 별개로 이 종목의 전체 기록 흐름을 보여줘.</p></div><div class="exercise-trend-picker"><select id="historyExerciseSelect" class="text-input">${available.map(item => `<option value="${esc(item.exercise.id)}" ${item.exercise.id === exercise.id ? 'selected' : ''}>${esc(item.exercise.name)} · ${item.count}회</option>`).join('')}</select><button class="secondary-btn compact-btn" data-action="exercise-detail" data-exercise-id="${esc(exercise.id)}">상세</button></div>${charts || '<div class="card"><p class="muted small">그래프로 표시할 완료값이 없어.</p></div>'}`;
+}
+
+function feedbackPromptForRange(range) {
+  const sessions = sessionsInRange(range, true).sort((a, b) => a.date.localeCompare(b.date));
+  if (!sessions.length) return '';
+  const totals = periodTotals(sessions, range.from, range.to);
+  const totalDays = Math.round((dateFromKey(range.to) - dateFromKey(range.from)) / 86400000) + 1;
+  const bodyWeights = [...settingValue('bodyWeightEntries', [])].filter(entry => entry.date <= range.to).sort((a, b) => a.date.localeCompare(b.date));
+  const latestWeight = bodyWeights.at(-1);
+  const sessionText = sessions.map(session => {
+    const logs = session.exercises.filter(log => completedSets(log).length).map(log => {
+      const exercise = exerciseById(log.exerciseId) || log; const config = { ...exercise, ...log };
+      const sets = completedSets(log).map((set, index) => `${index + 1}세트 ${formatCompletedSet(set, config)}`).join(' / ');
+      const previous = previousExerciseLog(log.exerciseId, session.date); const comparison = compareExerciseLogs(log, previous, config);
+      const next = buildNextTarget(log, config);
+      return `- ${exerciseNameFromLog(log)} (${muscleLabel(exercise.muscleGroup)}, 목표 ${targetText(config)}${isWarmupLog(log) ? ', 준비운동' : ''})\n  수행: ${sets}\n  판정: ${comparison.label} — ${comparison.detail}\n  앱의 다음 목표: ${formatNextTarget(next, config)}`;
+    }).join('\n');
+    return `### ${session.date} · ${session.routineName || '개별 운동'}\n세션 합계: ${hardSets(session)} hard sets, ${Math.round(sessionVolume(session)).toLocaleString()}kg volume${session.notes ? `\n메모: ${session.notes}` : ''}\n${logs}`;
+  }).join('\n\n');
+  return `너는 근거 중심의 운동 코치야. 아래 기록을 분석하되, 기록에 없는 사실은 추측하지 말고 통증이나 부상 신호가 있으면 증량보다 안전을 우선해줘.
+
+[기록 조건]
+- 앱: PR+ v${APP_VERSION}
+- 분석 기간: ${range.label} (${range.from} ~ ${range.to})
+- 운동일 경계: 오전 7시. 00:00~06:59 운동은 전날 기록으로 계산됨
+- 볼륨은 중량 × 반복수의 합이며 시간 운동과 보조 중량 운동은 볼륨에서 제외됨
+
+[기간 요약]
+- 훈련일: ${totals.days}일
+- 휴식/미등록일: ${Math.max(0, totalDays - totals.days)}일
+- Hard sets: ${totals.sets}세트
+- 총 볼륨: ${Math.round(totals.volume).toLocaleString()}kg
+- 최근 체중: ${latestWeight ? `${latestWeight.weight}kg (${latestWeight.date})` : '기록 없음'}
+
+[운동 기록]
+${sessionText}
+
+[피드백 요청]
+1. 종목별 중량·횟수·RIR·유지시간이 실제로 발전 중인지 구분해줘.
+2. 정체, 과도한 피로, 세트 수 불균형 가능성을 기록 근거와 함께 알려줘.
+3. 다음 운동에서 유지/증량/반복 추가/감량 중 무엇을 선택할지 종목별로 제안해줘.
+4. 자세나 통증은 기록만으로 판단할 수 없다는 한계를 분명히 하고, 내가 추가로 알려줘야 할 질문을 해줘.
+5. 마지막에 다음 세션용 간단한 체크리스트를 만들어줘.`;
+}
+function showFeedbackPrompt(range) {
+  const prompt = feedbackPromptForRange(range);
+  if (!prompt) return toast('완료된 운동 기록이 있어야 요약할 수 있어.');
+  document.querySelector('#feedbackPrompt').value = prompt;
+  document.querySelector('#feedbackPromptRange').textContent = `${range.label} · 기록은 자동 전송되지 않아.`;
+  document.querySelector('#feedbackDialog').showModal();
+}
+async function copyFeedbackPrompt() {
+  const field = document.querySelector('#feedbackPrompt');
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(field.value);
+    else { field.focus(); field.select(); if (!document.execCommand('copy')) throw new Error('copy failed'); }
+    toast('GPT 상담용 텍스트를 복사했어. ChatGPT에 붙여넣으면 돼.');
+  } catch (error) {
+    console.error(error); field.focus(); field.select(); toast('자동 복사가 막혔어. 선택된 텍스트를 직접 복사해줘.');
+  }
 }
 
 function renderLibrary() {
@@ -838,6 +961,29 @@ async function saveCurrentSession() {
   if (!state.currentSession) return;
   state.currentSession.updatedAt = Date.now(); await put(STORES.sessions, state.currentSession);
 }
+function clearDurationTimer() {
+  clearInterval(state.durationTimerInterval); state.durationTimerInterval = null; state.durationTimer = null;
+}
+async function moveCurrentExercise(index, direction) {
+  const exercises = state.currentSession?.exercises; const target = direction === 'up' ? index - 1 : index + 1;
+  if (!exercises || target < 0 || target >= exercises.length) return;
+  [exercises[index], exercises[target]] = [exercises[target], exercises[index]];
+  if (state.durationTimer?.exerciseIndex === index) state.durationTimer.exerciseIndex = target;
+  else if (state.durationTimer?.exerciseIndex === target) state.durationTimer.exerciseIndex = index;
+  await saveCurrentSession(); renderToday();
+}
+async function removeCurrentSet(exerciseIndex, setIndex) {
+  const log = state.currentSession?.exercises[exerciseIndex]; const set = log?.sets[setIndex];
+  if (!set) return;
+  const hasRecord = set.done || [set.weight, set.reps, set.duration, set.rir].some(value => value !== '' && value !== null && value !== undefined);
+  if (hasRecord && !await confirmAsk('세트 삭제', `${setIndex + 1}세트에 입력한 기록도 함께 삭제할까?`)) return;
+  if (state.durationTimer?.exerciseIndex === exerciseIndex) {
+    if (state.durationTimer.setIndex === setIndex) clearDurationTimer();
+    else if (state.durationTimer.setIndex > setIndex) state.durationTimer.setIndex -= 1;
+  }
+  log.sets.splice(setIndex, 1); log.targetSets = log.sets.length;
+  await saveCurrentSession(); renderToday(); toast('세트를 삭제했어.');
+}
 async function saveRoutine(routine) {
   routine.items = routine.items.map((item, order) => ({ ...item, order }));
   routine.updatedAt = Date.now(); await put(STORES.routines, routine);
@@ -1044,6 +1190,7 @@ app.addEventListener('input', async event => {
 });
 app.addEventListener('change', async event => {
   const element = event.target;
+  if (element.id === 'historyExerciseSelect') { state.historyExerciseId = element.value; renderHistory(); return; }
   if (element.matches('[data-field="done"]')) {
     const set = state.currentSession?.exercises[num(element.dataset.eidx)]?.sets[num(element.dataset.sidx)];
     if (set) { set.done = element.checked; await saveCurrentSession(); }
@@ -1068,11 +1215,14 @@ app.addEventListener('click', async event => {
   const button = event.target.closest('[data-action]'); if (!button) return;
   const action = button.dataset.action;
   if (action === 'add-exercise') showExerciseDialog('session');
+  if (action === 'toggle-session-edit') { state.editTodayOrder = !state.editTodayOrder; renderToday(); }
+  if (action === 'move-session-exercise') await moveCurrentExercise(num(button.dataset.eidx), button.dataset.direction);
   if (action === 'start-routine') await startRoutine(button.dataset.routineId);
   if (action === 'add-set') {
     const log = state.currentSession.exercises[num(button.dataset.eidx)]; const last = log.sets.at(-1) || {};
-    log.sets.push({ weight: last.weight || '', reps: '', duration: '', rir: '', done: false }); await saveCurrentSession(); renderToday();
+    log.sets.push({ weight: last.weight ?? '', reps: '', duration: '', rir: '', done: false }); log.targetSets = log.sets.length; await saveCurrentSession(); renderToday();
   }
+  if (action === 'remove-set') await removeCurrentSet(num(button.dataset.eidx), num(button.dataset.sidx));
   if (action === 'copy-prev') {
     const log = state.currentSession.exercises[num(button.dataset.eidx)]; const previous = previousExerciseLog(log.exerciseId, state.currentSession.date);
     if (!previous) return toast('복사할 이전 기록이 없어.');
@@ -1080,7 +1230,10 @@ app.addEventListener('click', async event => {
     await saveCurrentSession(); renderToday(); toast('지난 기록을 불러왔어. 완료 체크는 비워뒀어.');
   }
   if (action === 'remove-exercise' && await confirmAsk('운동 삭제', '오늘 세션에서 이 운동과 입력한 세트를 삭제할까?')) {
-    state.currentSession.exercises.splice(num(button.dataset.eidx), 1); await saveCurrentSession(); await refreshData(); render();
+    const exerciseIndex = num(button.dataset.eidx);
+    if (state.durationTimer?.exerciseIndex === exerciseIndex) clearDurationTimer();
+    else if (state.durationTimer?.exerciseIndex > exerciseIndex) state.durationTimer.exerciseIndex -= 1;
+    state.currentSession.exercises.splice(exerciseIndex, 1); await saveCurrentSession(); await refreshData(); render();
   }
   if (action === 'finish-session') { state.currentSession.finishedAt = Date.now(); await saveCurrentSession(); await refreshData(); renderToday(); toast('오늘 운동을 완료했어.'); }
   if (action === 'edit-routine') { state.editRoutineId = state.editRoutineId === button.dataset.routineId ? null : button.dataset.routineId; renderRoutines(); }
@@ -1104,6 +1257,10 @@ app.addEventListener('click', async event => {
   if (action === 'save-exercise-settings') await saveExerciseSettings();
   if (action === 'toggle-duration-timer') await toggleDurationTimer(num(button.dataset.eidx), num(button.dataset.sidx));
   if (action === 'save-body-weight') await saveBodyWeight();
+  if (action === 'history-period') { state.historyPeriod = button.dataset.period; state.historyAnchor = todayKey(); state.historyLimit = 31; renderHistory(); }
+  if (action === 'shift-history-period') { shiftHistoryPeriod(button.dataset.direction); renderHistory(); }
+  if (action === 'feedback-history') showFeedbackPrompt(historyPeriodRange());
+  if (action === 'feedback-today') showFeedbackPrompt(historyPeriodRange('day', state.currentSession?.date || todayKey()));
   if (action === 'add-library-to-routine') {
     const routineId = button.closest('.library-item')?.querySelector('.mini-select')?.value;
     if (routineId) await addExerciseToRoutine(routineId, button.dataset.exerciseId);
@@ -1184,6 +1341,8 @@ document.querySelector('#exerciseDetailDialog').addEventListener('change', event
 document.querySelector('#closeSessionEditDialog').addEventListener('click', () => {
   document.querySelector('#sessionEditDialog').close(); state.editingSession = null;
 });
+document.querySelector('#closeFeedbackDialog').addEventListener('click', () => document.querySelector('#feedbackDialog').close());
+document.querySelector('#copyFeedbackPrompt').addEventListener('click', copyFeedbackPrompt);
 document.querySelector('#sessionEditDialog').addEventListener('input', event => {
   const session = state.editingSession; if (!session) return;
   if (event.target.id === 'editSessionDate') session.date = event.target.value;
