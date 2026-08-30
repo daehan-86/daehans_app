@@ -9,7 +9,8 @@ import {
   migrateBackupV1ToV2,
   migrateBackupV2ToV3,
   migrateBackupV3ToV4,
-  migrateBackupV4ToV5
+  migrateBackupV4ToV5,
+  migrateBackupV5ToV6
 } from '../data.mjs';
 
 function assert(condition, message) {
@@ -62,7 +63,7 @@ function run() {
   };
   const originalV1 = stable(v1);
   const migratedV1 = migrateBackupToLatest(v1);
-  const chainedV1 = migrateBackupV4ToV5(migrateBackupV3ToV4(migrateBackupV2ToV3(migrateBackupV1ToV2(v1))));
+  const chainedV1 = migrateBackupV5ToV6(migrateBackupV4ToV5(migrateBackupV3ToV4(migrateBackupV2ToV3(migrateBackupV1ToV2(v1)))));
   assert(stable(v1) === originalV1, 'migration은 입력 백업을 직접 변경하면 안 된다.');
   assert(stable(migratedV1) === stable(chainedV1), 'v1은 v1→v2→v3 순서로 전이돼야 한다.');
   assert(migratedV1.schemaVersion === DATA_SCHEMA_VERSION, 'v1 백업은 최신 schema가 되어야 한다.');
@@ -79,11 +80,11 @@ function run() {
     settings: []
   };
   const migratedV2 = migrateBackupToLatest(v2);
-  assert(migratedV2.schemaVersion === 5, 'v2 백업은 v5로 전이돼야 한다.');
-  assert(Array.isArray(migratedV2.routines), 'v5 백업에는 routines 배열이 있어야 한다.');
+  assert(migratedV2.schemaVersion === 6, 'v2 백업은 v6으로 전이돼야 한다.');
+  assert(Array.isArray(migratedV2.routines), 'v6 백업에는 routines 배열이 있어야 한다.');
   assert(migratedV2.exercises[0].name === 'My Exercise', '사용자 운동명은 보존해야 한다.');
-  assert(migratedV2.settings.some(setting => setting.key === 'schemaVersion' && setting.value === 5), '현재 schema 설정을 기록해야 한다.');
-  assert(Array.isArray(migratedV2.coachPlans), 'v5 백업에는 GPT 추천 계획 배열이 있어야 한다.');
+  assert(migratedV2.settings.some(setting => setting.key === 'schemaVersion' && setting.value === 6), '현재 schema 설정을 기록해야 한다.');
+  assert(Array.isArray(migratedV2.coachPlans), 'v6 백업에는 GPT 추천 계획 배열이 있어야 한다.');
 
   const v3 = {
     app: 'PR+', schemaVersion: 3, version: 3,
@@ -95,7 +96,7 @@ function run() {
   const originalV3 = stable(v3);
   const migratedV3 = migrateBackupToLatest(v3);
   assert(stable(v3) === originalV3, 'v3→v4 migration은 입력을 직접 변경하면 안 된다.');
-  assert(migratedV3.schemaVersion === 5, 'v3 백업은 v5로 전이돼야 한다.');
+  assert(migratedV3.schemaVersion === 6, 'v3 백업은 v6으로 전이돼야 한다.');
   assert(migratedV3.exercises[0].trackingMode === 'duration', 'v3 Dead Hang은 시간 기반으로 전이돼야 한다.');
   assert(migratedV3.routines[0].items[0].durationMax === 60, 'v3 Dead Hang 루틴은 초 단위 목표를 받아야 한다.');
   assert(migratedV3.sessions[0].exercises[0].sets[0].duration === '', '기존 완료 기록은 보존하고 빈 시간 필드를 추가해야 한다.');
@@ -112,7 +113,7 @@ function run() {
   const originalV4 = stable(v4);
   const migratedV4 = migrateBackupToLatest(v4);
   assert(stable(v4) === originalV4, 'v4→v5 migration은 입력을 직접 변경하면 안 된다.');
-  assert(migratedV4.schemaVersion === 5 && Array.isArray(migratedV4.coachPlans), 'v4는 빈 coachPlans를 가진 v5로 전이돼야 한다.');
+  assert(migratedV4.schemaVersion === 6 && Array.isArray(migratedV4.coachPlans), 'v4는 빈 coachPlans를 가진 v6으로 전이돼야 한다.');
   assert(migratedV4.exercises[0].weightBasis === null, '기존 중량 표시 기준은 추측하면 안 된다.');
   assert(Array.isArray(migratedV4.sessions[0].symptoms), 'v5 세션에는 구조화된 증상 배열이 있어야 한다.');
   let invalidV4Rejected = false;
@@ -126,16 +127,27 @@ function run() {
     app: 'PR+', schemaVersion: 5, version: 5,
     exercises: [{ id: 'exercise-v5', name: 'Current Exercise', trackingMode: 'reps', loadMode: 'external', weightBasis: 'per_hand', repMin: 8, repMax: 12 }],
     routines: [{ id: 'routine-v5', name: 'Current', items: [] }],
-    sessions: [{ id: 'session-v5', date: '2026-05-05', symptoms: [{ exerciseId: 'exercise-v5', location: 'right_shoulder', severity: 3, note: '' }], exercises: [{ exerciseId: 'exercise-v5', trackingMode: 'reps', sets: [{ weight: 10, reps: 10, duration: '', rir: 2, setRole: 'working', done: true }] }] }],
+    sessions: [{ id: 'session-v5', date: '2026-05-05', coachPlanRef: { planId: 'plan-v5', requestId: 'request-v5', trainingDate: '2026-05-02', protocolVersion: '1.1' }, symptoms: [{ exerciseId: 'exercise-v5', location: 'right_shoulder', severity: 3, note: '' }], exercises: [{ exerciseId: 'exercise-v5', trackingMode: 'reps', sets: [{ weight: 10, reps: 10, duration: '', rir: 2, setRole: 'working', done: true }] }] }],
     settings: [{ key: 'schemaVersion', value: 5 }], coachPlans: []
   };
-  assert(stable(migrateBackupToLatest(v5)) === stable(v5), '현재 v5 schema 백업은 내용이 바뀌면 안 된다.');
+  const originalV5 = stable(v5);
+  const migratedV5 = migrateBackupToLatest(v5);
+  assert(stable(v5) === originalV5, 'v5→v6 migration은 입력을 직접 변경하면 안 된다.');
+  assert(migratedV5.schemaVersion === 6, 'v5 백업은 v6으로 전이돼야 한다.');
+  assert(migratedV5.sessions[0].coachPlanRef.scheduledTrainingDate === '2026-05-02', '기존 GPT 추천일을 예정일로 보존해야 한다.');
+  assert(migratedV5.sessions[0].coachPlanRef.actualTrainingDate === '2026-05-05', '기존 세션 날짜를 실제 수행일로 기록해야 한다.');
+  assert(migratedV5.sessions[0].coachPlanRef.scheduleOffsetDays === 3 && migratedV5.sessions[0].coachPlanRef.scheduleStatus === 'delayed', '기존 GPT 세션의 지연 일수를 계산해야 한다.');
   let invalidV5Rejected = false;
   try { migrateBackupToLatest({ ...v5, sessions: [{ ...v5.sessions[0], symptoms: [{ location: 'shoulder', severity: 11 }] }] }); } catch { invalidV5Rejected = true; }
   assert(invalidV5Rejected, '범위를 벗어난 증상 강도는 복원하면 안 된다.');
+  let invalidScheduleRejected = false;
+  try { migrateBackupToLatest({ ...v5, sessions: [{ ...v5.sessions[0], coachPlanRef: { ...v5.sessions[0].coachPlanRef, trainingDate: 'invalid' } }] }); } catch { invalidScheduleRejected = true; }
+  assert(invalidScheduleRejected, '손상된 GPT 추천 예정일은 추측해서 변환하면 안 된다.');
+  const v6 = migratedV5;
+  assert(stable(migrateBackupToLatest(v6)) === stable(v6), '현재 v6 schema 백업은 내용이 바뀌면 안 된다.');
   let futureRejected = false;
   try {
-    migrateBackupToLatest({ ...v5, schemaVersion: 6, version: 6 });
+    migrateBackupToLatest({ ...v6, schemaVersion: 7, version: 7 });
   } catch {
     futureRejected = true;
   }

@@ -1,6 +1,6 @@
-export const APP_VERSION = '0.3.1';
-export const RELEASE_ID = '0.3.1-r1';
-export const DATA_SCHEMA_VERSION = 5;
+export const APP_VERSION = '0.3.2';
+export const RELEASE_ID = '0.3.2-r1';
+export const DATA_SCHEMA_VERSION = 6;
 export const TRAINING_DAY_START_HOUR = 7;
 export const DB_NAME = 'overload-db';
 export const DB_VERSION = 3;
@@ -153,6 +153,26 @@ const finiteNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? N
 const optionalPositiveNumber = value => value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) <= 0 ? null : Number(value);
 const SET_ROLES = ['warmup', 'working', 'backoff'];
 const WEIGHT_BASES = ['total', 'per_hand', 'per_side', 'machine_stack'];
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function scheduleOffsetDays(scheduledDate, actualDate) {
+  return Math.round((new Date(`${actualDate}T12:00:00`) - new Date(`${scheduledDate}T12:00:00`)) / 86400000);
+}
+
+function normalizeCoachPlanRef(reference, sessionDate) {
+  if (!reference || typeof reference !== 'object') return null;
+  const scheduledTrainingDate = String(reference.scheduledTrainingDate || reference.trainingDate || '');
+  if (!DATE_PATTERN.test(scheduledTrainingDate) || !DATE_PATTERN.test(sessionDate)) return clone(reference);
+  const scheduleOffset = scheduleOffsetDays(scheduledTrainingDate, sessionDate);
+  return {
+    ...clone(reference),
+    trainingDate: scheduledTrainingDate,
+    scheduledTrainingDate,
+    actualTrainingDate: sessionDate,
+    scheduleOffsetDays: scheduleOffset,
+    scheduleStatus: scheduleOffset > 0 ? 'delayed' : scheduleOffset < 0 ? 'early' : 'on_time'
+  };
+}
 
 export function localDateKey(value = new Date()) {
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
@@ -238,11 +258,13 @@ export function normalizeExercise(exercise) {
 
 export function normalizeSession(session) {
   const source = clone(session || {});
+  const sessionDate = String(source.date || '').slice(0, 10);
   return {
     ...source,
     id: String(source.id || ''),
-    date: String(source.date || '').slice(0, 10),
+    date: sessionDate,
     notes: String(source.notes || ''),
+    coachPlanRef: normalizeCoachPlanRef(source.coachPlanRef, sessionDate),
     symptoms: asArray(source.symptoms).map(symptom => ({
       exerciseId: symptom?.exerciseId ? String(symptom.exerciseId) : null,
       location: String(symptom?.location || '').trim(),
@@ -390,11 +412,34 @@ export function migrateBackupV4ToV5(data) {
   };
 }
 
+export function migrateBackupV5ToV6(data) {
+  asArray(data?.sessions).forEach(session => {
+    if (!session?.coachPlanRef) return;
+    const scheduled = String(session.coachPlanRef.scheduledTrainingDate || session.coachPlanRef.trainingDate || '');
+    if (!DATE_PATTERN.test(scheduled)) throw new Error(`GPT 추천 예정일이 올바르지 않아: ${session.id}`);
+  });
+  const settings = asArray(data?.settings).filter(setting => setting?.key !== 'schemaVersion');
+  settings.push({ key: 'schemaVersion', value: 6 });
+  return {
+    ...clone(data),
+    app: 'PR+',
+    appVersion: APP_VERSION,
+    version: 6,
+    schemaVersion: 6,
+    exercises: asArray(data?.exercises).map(normalizeExercise),
+    routines: asArray(data?.routines).map(normalizeRoutine),
+    sessions: asArray(data?.sessions).map(normalizeSession),
+    settings,
+    coachPlans: asArray(data?.coachPlans).map(plan => clone(plan))
+  };
+}
+
 const BACKUP_MIGRATIONS = {
   1: migrateBackupV1ToV2,
   2: migrateBackupV2ToV3,
   3: migrateBackupV3ToV4,
-  4: migrateBackupV4ToV5
+  4: migrateBackupV4ToV5,
+  5: migrateBackupV5ToV6
 };
 
 function validateRecordIds(records, label) {
@@ -437,13 +482,22 @@ export function validateBackup(data) {
       });
     }));
   }
-  if (data.schemaVersion === 5) {
+  if (data.schemaVersion >= 5) {
     data.exercises.forEach(exercise => {
       if (exercise.weightBasis !== null && exercise.weightBasis !== undefined && !WEIGHT_BASES.includes(exercise.weightBasis)) throw new Error(`중량 표시 기준이 올바르지 않아: ${exercise.id}`);
     });
     data.sessions.forEach(session => asArray(session.symptoms).forEach(symptom => {
       if (!String(symptom.location || '').trim() || finiteNumber(symptom.severity, -1) < 0 || finiteNumber(symptom.severity, 11) > 10) throw new Error(`증상 기록이 올바르지 않아: ${session.id}`);
     }));
+  }
+  if (data.schemaVersion === 6) {
+    data.sessions.forEach(session => {
+      const reference = session.coachPlanRef; if (!reference) return;
+      if (!DATE_PATTERN.test(String(reference.scheduledTrainingDate || '')) || reference.actualTrainingDate !== session.date) throw new Error(`GPT 추천 일정 기록이 올바르지 않아: ${session.id}`);
+      const expectedOffset = scheduleOffsetDays(reference.scheduledTrainingDate, session.date);
+      const expectedStatus = expectedOffset > 0 ? 'delayed' : expectedOffset < 0 ? 'early' : 'on_time';
+      if (finiteNumber(reference.scheduleOffsetDays, NaN) !== expectedOffset || reference.scheduleStatus !== expectedStatus) throw new Error(`GPT 추천 일정 차이가 올바르지 않아: ${session.id}`);
+    });
   }
   return true;
 }

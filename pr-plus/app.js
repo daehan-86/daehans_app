@@ -120,6 +120,13 @@ const dateFromKey = key => new Date(`${key}T12:00:00`);
 const shiftDateKey = (key, days) => {
   const date = dateFromKey(key); date.setDate(date.getDate() + days); return localDateKey(date);
 };
+const dateOffsetDays = (scheduledDate, actualDate) => Math.round((dateFromKey(actualDate) - dateFromKey(scheduledDate)) / 86400000);
+function scheduleStatus(offset) { return offset > 0 ? 'delayed' : offset < 0 ? 'early' : 'on_time'; }
+function scheduleChangeText(scheduledDate, actualDate) {
+  const offset = dateOffsetDays(scheduledDate, actualDate);
+  if (!offset) return `원래 예정일 ${scheduledDate}에 수행`;
+  return `원래 ${scheduledDate} 예정 · ${actualDate}에 ${Math.abs(offset)}일 ${offset > 0 ? '미뤄서' : '당겨서'} 수행`;
+}
 const exerciseById = id => state.exercises.find(exercise => exercise.id === id);
 const routineById = id => state.routines.find(routine => routine.id === id);
 
@@ -310,13 +317,16 @@ function renderToday() {
   const dateLabel = `${date.getMonth() + 1}월 ${date.getDate()}일 ${['일', '월', '화', '수', '목', '금', '토'][date.getDay()]}요일`;
   let html = `<div class="section-head"><div><h2>오늘의 훈련</h2><p>운동일은 오전 7시에 바뀐다.</p></div><div class="date-chip">${dateLabel}</div></div>`;
   if (!session || !session.exercises.length) {
-    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.3.1 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
+    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.3.2 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
     html += `<div class="routine-start-grid">${state.routines.map(routineStartCard).join('')}</div>`;
     html += `<button class="secondary-btn wide manual-start" data-action="add-exercise">루틴 없이 운동 추가</button>`;
   } else {
     const routineLabel = session.routineName ? `<span class="badge pr-badge">${esc(session.routineName)}</span>` : '';
     html += `<div class="session-title-row"><div>${routineLabel}${session.finishedAt ? '<span class="badge">완료됨</span>' : '<span class="badge">기록 중</span>'}</div><button class="secondary-btn compact-btn ${state.editTodayOrder ? 'active-edit-btn' : ''}" data-action="toggle-session-edit">${state.editTodayOrder ? '편집 완료' : '운동 순서 편집'}</button></div>`;
-    if (session.coachPlanRef) html += `<div class="gpt-session-banner"><b>GPT 추천 운동</b><span>Protocol ${esc(session.coachPlanRef.protocolVersion)} · 목표는 참고값이며 ACTUAL은 직접 기록해.</span></div>`;
+    if (session.coachPlanRef) {
+      const scheduledDate = session.coachPlanRef.scheduledTrainingDate || session.coachPlanRef.trainingDate || session.date;
+      html += `<div class="gpt-session-banner"><b>GPT 추천 운동</b><span>${esc(scheduleChangeText(scheduledDate, session.date))}</span><small>Protocol ${esc(session.coachPlanRef.protocolVersion)} · 목표는 참고값이며 ACTUAL은 직접 기록해.</small></div>`;
+    }
     html += `<div class="stats-grid"><div class="stat-card"><span>오늘 완료 세트</span><b>${hardSets(session)}</b></div><div class="stat-card"><span>총 볼륨</span><b>${Math.round(sessionVolume(session)).toLocaleString()}<small> kg</small></b></div></div>`;
     html += `<div class="baseline-banner"><b>Progressive Overload</b><span>LAST와 NEXT를 참고하고, 오늘 실제 수행값과 RIR을 기록해.</span></div>`;
     if (state.editTodayOrder) html += '<div class="session-edit-banner">화살표로 순서를 바꾸거나 이 세션에서 운동을 삭제할 수 있어. 루틴 원본은 바뀌지 않아.</div>';
@@ -419,17 +429,18 @@ function exerciseCard(log, exerciseIndex) {
 }
 
 function linkedCoachSession(planId, trainingDate) {
-  return state.sessions.find(session => session.coachPlanRef?.planId === planId && session.coachPlanRef?.trainingDate === trainingDate);
+  return state.sessions.find(session => session.coachPlanRef?.planId === planId && (session.coachPlanRef?.scheduledTrainingDate || session.coachPlanRef?.trainingDate) === trainingDate);
 }
 function coachPlanSessionCard(plan, session, index) {
   const linked = linkedCoachSession(plan.planId, session.trainingDate);
   const isToday = session.trainingDate === todayKey();
   const isPast = session.trainingDate < todayKey();
   const status = linked?.finishedAt ? '완료' : linked ? '진행 중' : isToday ? '오늘' : isPast ? '지난 추천' : '예정';
-  const startDisabled = !isToday || Boolean(linked) ? 'disabled' : '';
-  const buttonText = linked?.finishedAt ? '수행 완료' : linked ? '진행 중' : isToday ? '추천 운동 시작' : isPast ? '기간 지남' : '예정';
+  const startDisabled = linked ? 'disabled' : '';
+  const buttonText = linked?.finishedAt ? '수행 완료' : linked ? '진행 중' : isToday ? '추천 운동 시작' : isPast ? '오늘로 미뤄 시작' : '오늘로 당겨 시작';
+  const scheduleNote = linked ? scheduleChangeText(session.trainingDate, linked.date) : isToday ? '오늘 예정된 추천' : `${session.trainingDate} 예정 · 오늘 시작 가능`;
   const names = session.exercises.map(item => `${item.exerciseName} ${item.sets.length}세트`).join(' · ');
-  return `<article class="coach-session-card"><div class="coach-session-head"><div><time>${esc(session.trainingDate)} · ${esc(dayKo(session.trainingDate))}요일</time><h4>${esc(session.name)}</h4></div><span class="badge ${isToday && !linked ? 'pr-badge' : ''}">${status}</span></div><p>${esc(session.rationale)}</p><small>${esc(names)}</small><button class="primary-btn wide" data-action="start-coach-session" data-plan-id="${esc(plan.planId)}" data-session-index="${index}" ${startDisabled}>${buttonText}</button></article>`;
+  return `<article class="coach-session-card"><div class="coach-session-head"><div><time>${esc(session.trainingDate)} · ${esc(dayKo(session.trainingDate))}요일</time><h4>${esc(session.name)}</h4></div><span class="badge ${isToday && !linked ? 'pr-badge' : ''}">${status}</span></div><p>${esc(session.rationale)}</p><small>${esc(names)}</small><div class="coach-schedule-note">${esc(scheduleNote)}</div><button class="primary-btn wide" data-action="start-coach-session" data-plan-id="${esc(plan.planId)}" data-session-index="${index}" ${startDisabled}>${buttonText}</button></article>`;
 }
 function coachPlanCard(plan) {
   const needsInput = plan.status === 'needs_input';
@@ -504,7 +515,12 @@ async function startCoachSession(planId, sessionIndex) {
   const plan = state.coachPlans.find(item => item.planId === planId); const prescription = plan?.sessions?.[sessionIndex];
   if (!plan || !prescription) return toast('GPT 추천 세션을 찾을 수 없어.');
   if (plan.status !== 'ready') return toast('추가 정보가 필요한 계획은 시작할 수 없어.');
-  if (prescription.trainingDate !== todayKey()) return toast(`${prescription.trainingDate} 운동일에 시작할 수 있어.`);
+  if (state.currentSession?.exercises?.length) return toast('오늘 진행 중인 세션이 이미 있어.');
+  const actualTrainingDate = todayKey(); const scheduleOffset = dateOffsetDays(prescription.trainingDate, actualTrainingDate);
+  if (scheduleOffset !== 0) {
+    const direction = scheduleOffset > 0 ? `${scheduleOffset}일 미뤄서` : `${Math.abs(scheduleOffset)}일 당겨서`;
+    if (!await confirmAsk('GPT 추천 일정 변경', `원래 ${prescription.trainingDate} 추천 운동이야. 오늘 ${actualTrainingDate}로 ${direction} 시작할까? 일정 변경은 다음 GPT 요청에도 전달돼.`)) return;
+  }
   const session = await ensureTodaySession();
   if (session.exercises.length) return toast('오늘 진행 중인 세션이 이미 있어.');
   const logs = prescription.exercises.map(item => {
@@ -520,9 +536,15 @@ async function startCoachSession(planId, sessionIndex) {
   if (logs.length !== prescription.exercises.length) return toast('현재 Library에 없는 추천 운동이 있어 시작하지 않았어.');
   session.routineId = prescription.baseRoutineId;
   session.routineName = prescription.name;
-  session.coachPlanRef = { planId: plan.planId, requestId: plan.requestId, trainingDate: prescription.trainingDate, protocolVersion: plan.protocolVersion };
+  session.coachPlanRef = {
+    planId: plan.planId, requestId: plan.requestId, trainingDate: prescription.trainingDate,
+    scheduledTrainingDate: prescription.trainingDate, actualTrainingDate,
+    scheduleOffsetDays: scheduleOffset, scheduleStatus: scheduleStatus(scheduleOffset),
+    protocolVersion: plan.protocolVersion
+  };
   session.exercises = logs; session.startedAt = Date.now(); session.finishedAt = null;
-  await saveCurrentSession(); await refreshData(); state.view = 'today'; render(); toast('GPT 목표를 참고용으로 불러왔어. 실제 수행값은 비어 있어.');
+  await saveCurrentSession(); await refreshData(); state.view = 'today'; render();
+  toast(scheduleOffset ? `추천 일정을 ${Math.abs(scheduleOffset)}일 ${scheduleOffset > 0 ? '미뤄' : '당겨'} 불러왔어.` : 'GPT 목표를 참고용으로 불러왔어. 실제 수행값은 비어 있어.');
 }
 function cloneCoachValue(value) { return JSON.parse(JSON.stringify(value)); }
 async function deleteCoachPlan(planId) {
@@ -858,6 +880,20 @@ function coachRoutineRecords() {
     }))
   }));
 }
+function coachScheduleRecord(session) {
+  if (!session.coachPlanRef) return null;
+  const scheduledTrainingDate = session.coachPlanRef.scheduledTrainingDate || session.coachPlanRef.trainingDate || session.date;
+  const scheduleOffset = dateOffsetDays(scheduledTrainingDate, session.date);
+  return {
+    planId: session.coachPlanRef.planId,
+    requestId: session.coachPlanRef.requestId,
+    scheduledTrainingDate,
+    actualTrainingDate: session.date,
+    scheduleOffsetDays: scheduleOffset,
+    scheduleStatus: scheduleStatus(scheduleOffset),
+    summary: scheduleChangeText(scheduledTrainingDate, session.date)
+  };
+}
 async function feedbackPromptForRange(range) {
   const sessions = sessionsInRange(range, true).sort((a, b) => a.date.localeCompare(b.date));
   if (!sessions.length) return null;
@@ -865,7 +901,7 @@ async function feedbackPromptForRange(range) {
     trainingDate: session.date,
     routineId: session.routineId || null,
     routineName: session.routineName || '',
-    coachPlanRef: session.coachPlanRef ? { ...session.coachPlanRef } : null,
+    coachPlanRef: coachScheduleRecord(session),
     notes: session.notes || '',
     symptoms: (session.symptoms || []).map(symptom => ({ ...symptom })),
     exercises: session.exercises.filter(log => completedSets(log).length).map(log => {
@@ -889,6 +925,7 @@ async function feedbackPromptForRange(range) {
     const target = buildNextTarget(log, config);
     return { exerciseId: log.exerciseId, direction: coachDirection(target, config), message: target.message, sets: coachTargetRecords(target, config) };
   });
+  const scheduleChanges = sessions.map(coachScheduleRecord).filter(Boolean);
   const core = {
     appVersion: APP_VERSION,
     protocolVersion: COACH_PROTOCOL_VERSION,
@@ -900,9 +937,10 @@ async function feedbackPromptForRange(range) {
     exerciseCatalog: coachExerciseCatalog(),
     routines: coachRoutineRecords(),
     recentSessions,
+    scheduleChanges,
     appSuggestions,
     coachRequest: {
-      focus: '기록과 RIR, 증상, 세트 역할을 근거로 다음 운동의 세트별 목표를 정해줘.',
+      focus: '기록과 RIR, 증상, 세트 역할, 원래 추천일과 실제 수행일의 일정 변경을 근거로 다음 운동의 세트별 목표와 현실적인 일정을 정해줘.',
       questions: []
     }
   };

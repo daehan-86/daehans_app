@@ -45,6 +45,7 @@ daehans_app/
 - 선택 기간의 운동을 GPT 상담용 텍스트로 정리하고 클립보드에 복사
 - Coach Protocol v1.1 요청문 생성, GPT 추천 계획 검증·미리보기·별도 저장
 - 루틴 페이지의 날짜별 GPT 추천과 운동 중 세트별 GPT TARGET / 실제 수행 분리
+- GPT 추천일과 달라도 오늘 운동으로 시작하고, 원래 예정일·실제 수행일·지연/당김 일수를 다음 상담에 전달
 - Warm-up / Working / Back-off 세트 역할, 구조화된 통증·이상 신호와 중량 표시 기준
 - Exercise / Routine / Session / 설정 JSON 전체 백업·복원
 - 기존 `OVERLOAD` 및 PR+ v2/v3 백업의 순차 migration
@@ -149,7 +150,7 @@ PR+의 manifest와 Service Worker는 상대경로와 `./` scope를 사용하므�
 
 브랜드명은 `PR+`로 변경했지만 IndexedDB 이름은 기존 `overload-db`를 유지합니다. 같은 배포 URL에서 기존 앱을 PR+로 업데이트할 때 이미 저장된 운동 기록을 그대로 유지하기 위한 선택입니다.
 
-PR+ v0.3.1의 IndexedDB 버전은 `3`, 백업/저장 데이터 schema는 `5`입니다. 기존 데이터는 `v1 → v2 → v3 → v4 → v5` 인접 migration을 순서대로 거칩니다. v4→v5는 기존 운동·루틴·세션 값을 유지하고 빈 GPT 추천 저장소와 선택적인 세트 역할·증상·중량 기준 필드를 추가합니다. 알 수 없는 과거 세트 역할과 중량 기준은 추측하지 않습니다. 상세 규칙은 [`MIGRATIONS.md`](./MIGRATIONS.md)를 참고하세요.
+PR+ v0.3.2의 IndexedDB 버전은 `3`, 백업/저장 데이터 schema는 `6`입니다. 기존 데이터는 `v1 → v2 → v3 → v4 → v5 → v6` 인접 migration을 순서대로 거칩니다. v5→v6은 기존 GPT 세션의 추천일을 예정일로, 실제 세션 날짜를 수행일로 보존하고 일정 차이를 계산합니다. 일반 운동 기록은 변경하지 않습니다. 상세 규칙은 [`MIGRATIONS.md`](./MIGRATIONS.md)를 참고하세요.
 
 ## v0.3 기록 분석과 GPT 피드백
 
@@ -166,6 +167,13 @@ PR+ v0.3.1의 IndexedDB 버전은 `3`, 백업/저장 데이터 schema는 `5`입�
 - `needs_input` 응답은 질문·경고만 저장하고 운동 세션을 생성하지 않습니다.
 - 추천 날짜가 오늘 운동일과 일치할 때 시작할 수 있으며 GPT TARGET과 실제 ACTUAL 입력은 분리됩니다.
 - 전체 명세와 GPT 출력 지침은 [`PRPLUS_COACH_PROTOCOL_V1.1.md`](./PRPLUS_COACH_PROTOCOL_V1.1.md)에 있습니다.
+
+## v0.3.2 GPT 추천 일정 변경
+
+- GPT 추천 세션은 예정일이 지나거나 아직 오지 않았더라도 오늘 운동으로 시작할 수 있습니다.
+- 예정일과 다른 날 시작하면 변경 방향과 일수를 확인한 뒤 세션에 `scheduledTrainingDate`, `actualTrainingDate`, `scheduleOffsetDays`, `scheduleStatus`를 저장합니다.
+- 루틴 카드와 오늘 운동 화면에서 원래 예정일과 실제 수행일을 함께 표시합니다.
+- 다음 Coach Protocol 요청에는 `scheduleChanges`가 포함되어 GPT가 “원래 며칠 운동이었지만 며칠 미뤄 수행했다”는 사실을 일정과 회복 판단에 반영할 수 있습니다.
 
 ## v0.2+ 기록 방식과 추천 정책
 

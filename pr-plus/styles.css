@@ -108,7 +108,8 @@ button:disabled { opacity: .45; }
 .coach-target-panel p strong { color: #9ec3ff; }
 .gpt-session-banner { display: grid; gap: 3px; margin: 0 0 12px; padding: 11px 13px; border: 1px solid rgba(129,174,255,.28); border-radius: 13px; background: rgba(78,126,211,.08); }
 .gpt-session-banner b { color: #9ec3ff; font-size: 11px; }
-.gpt-session-banner span { color: var(--muted); font-size: 10px; }
+.gpt-session-banner span { color: #d8e6ff; font-size: 10px; }
+.gpt-session-banner small { color: var(--muted); font-size: 9px; }
 .session-actions { display: grid; gap: 10px; margin: 16px 0 4px; }
 .session-note { display: grid; gap: 7px; margin-top: 15px; color: var(--muted); font-size: 11px; }
 .session-note textarea, .detail-form textarea { min-height: 76px; resize: vertical; }
@@ -305,6 +306,7 @@ button:disabled { opacity: .45; }
 .coach-message { margin: 0; color: #dce6f7; font-size: 12px; line-height: 1.5; }
 .coach-session-card { display: grid; gap: 8px; padding: 13px; border: 1px solid rgba(129,174,255,.18); border-radius: 14px; background: rgba(78,126,211,.05); }
 .coach-session-card p, .coach-session-card small { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.coach-schedule-note { padding: 8px 9px; border-radius: 9px; background: rgba(129,174,255,.08); color: #b8d3ff; font-size: 9px; line-height: 1.4; }
 .coach-alerts { display: grid; gap: 6px; }
 .coach-alerts p { margin: 0; padding: 9px 10px; border-radius: 10px; font-size: 10px; line-height: 1.45; }
 .coach-alerts .warning { background: rgba(255,168,76,.1); color: #ffc987; }
