@@ -166,6 +166,7 @@ GPT는 시작·종료 표식 사이의 JSON을 요청 데이터로 읽어야 한
   "exerciseCatalog": [],
   "routines": [],
   "recentSessions": [],
+  "scheduleChanges": [],
   "appSuggestions": [],
   "coachRequest": {
     "focus": "다음 운동의 세트별 목표를 정해줘.",
@@ -232,6 +233,15 @@ GPT는 시작·종료 표식 사이의 JSON을 요청 데이터로 읽어야 한
   "trainingDate": "2026-08-24",
   "routineId": "routine-chest",
   "routineName": "Chest",
+  "coachPlanRef": {
+    "planId": "gpt-plan-example",
+    "requestId": "request-example",
+    "scheduledTrainingDate": "2026-08-22",
+    "actualTrainingDate": "2026-08-24",
+    "scheduleOffsetDays": 2,
+    "scheduleStatus": "delayed",
+    "summary": "원래 2026-08-22 예정 · 2026-08-24에 2일 미뤄서 수행"
+  },
   "notes": "특이사항 없음",
   "symptoms": [
     {
@@ -267,7 +277,28 @@ GPT는 시작·종료 표식 사이의 JSON을 요청 데이터로 읽어야 한
 - GPT는 증상이 있으면 증량보다 안전, 감량, 운동 변경 또는 추가 질문을 우선하며 의학적 진단을 하지 않는다.
 - `setRole`이 없는 legacy 세트는 역할을 추측하지 않는다.
 
-### 4.5 `appSuggestions` 항목
+### 4.5 `scheduleChanges` 항목
+
+GPT 추천 세션을 원래 날짜와 다른 운동일에 수행한 경우 PR+는 일정 변경을 구조화해서 전달한다.
+
+```json
+{
+  "planId": "gpt-plan-example",
+  "requestId": "request-example",
+  "scheduledTrainingDate": "2026-08-22",
+  "actualTrainingDate": "2026-08-24",
+  "scheduleOffsetDays": 2,
+  "scheduleStatus": "delayed",
+  "summary": "원래 2026-08-22 예정 · 2026-08-24에 2일 미뤄서 수행"
+}
+```
+
+- `scheduleOffsetDays`는 `actualTrainingDate - scheduledTrainingDate`다.
+- 양수는 `delayed`, 음수는 `early`, 0은 `on_time`이다.
+- GPT는 일정 변경을 수행 누락으로 단정하지 않고 실제 회복 간격, 가능한 운동일과 다음 일정의 현실성을 판단하는 근거로 사용한다.
+- 일정 변경 이유가 기록에 없으면 추측하지 말고 필요한 경우 `questions`로 묻는다.
+
+### 4.6 `appSuggestions` 항목
 
 이 값은 PR+의 점진적 과부하 계산 결과이며 GPT가 반드시 따를 필요는 없다. 다르게 추천한다면 `reason`에 기록 근거를 설명해야 한다.
 
@@ -564,6 +595,8 @@ ACTUAL
 - 사용자가 목표값을 입력칸에 불러오더라도 세트 완료는 별도로 눌러야 한다.
 - 앱 자체 계산은 `APP TARGET`, GPT 추천은 `GPT TARGET`으로 구분한다.
 - 세션 완료 후 추천 대비 실제 수행 결과를 다음 GPT 요청에 포함할 수 있다.
+- 추천 세션은 원래 `trainingDate`와 다른 날에도 사용자가 확인한 뒤 시작할 수 있다.
+- PR+는 원래 예정일과 실제 수행일을 모두 보존하며 다음 요청의 `scheduleChanges`로 전달한다.
 
 ---
 
@@ -588,13 +621,14 @@ PR+ 요청문을 받은 GPT는 다음 지침을 그대로 따른다.
 12. 예시 수치를 복사하지 말고 사용자의 실제 기록을 분석해 추천한다.
 13. working 세트를 중심으로 progression을 판단하고 warmup 세트는 working volume에서 제외한다.
 14. 심한 통증이나 필수 정보 누락 시 status를 needs_input으로 설정하고 sessions를 비운다.
+15. scheduleChanges가 있으면 원래 추천일과 실제 수행일의 차이를 회복 간격과 다음 일정에 반영하되, 변경 이유는 추측하지 않는다.
 ```
 
 ---
 
 ## 10. 호환성 정책
 
-- PR+ v0.3.1은 `PRPLUS_COACH_PROTOCOL 1.1`을 지원한다.
+- PR+ v0.3.2는 `PRPLUS_COACH_PROTOCOL 1.1`을 지원한다.
 - protocol 1.x에서 필드를 추가할 때는 선택 필드만 추가할 수 있다.
 - 기존 필드의 의미, 단위 또는 허용값을 바꾸면 protocol version을 2.0으로 올린다.
 - 앱은 알 수 없는 선택 필드를 무시할 수 있지만 알 수 없는 필수 프로토콜 버전을 가져오면 안 된다.
@@ -614,4 +648,5 @@ PR+ 요청문을 받은 GPT는 다음 지침을 그대로 따른다.
 6. 날짜, 운동, 세트별 목표와 경고를 확인한다.
 7. 문제가 없을 때만 "추천 저장"을 누른다.
 8. 운동할 때 GPT TARGET을 참고하고 ACTUAL에는 실제 수행값을 입력한다.
+9. 추천일과 다른 날 시작하면 일정 변경 확인창을 승인하고, 다음 GPT 요청에서 변경 내역이 전달되는지 확인한다.
 ```
