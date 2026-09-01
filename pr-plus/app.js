@@ -23,7 +23,8 @@ const state = {
   durationTimer: null, durationTimerInterval: null, activeTrainingDay: null,
   trainingDayTimer: null, historyLimit: 31, editingSession: null, editingSessionIsNew: false,
   editTodayOrder: false, historyPeriod: 'all', historyAnchor: null, historyExerciseId: null,
-  coachPlans: [], pendingCoachPlan: null, pendingCoachPlanText: ''
+  coachPlans: [], pendingCoachPlan: null, pendingCoachPlanText: '',
+  activeExerciseIndex: 0, activeDeckSessionId: null, deckAnimating: false, deckPointer: null
 };
 const app = document.querySelector('#app');
 
@@ -183,6 +184,10 @@ async function refreshData() {
   state.settings = settings;
   state.coachPlans = coachPlans.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || num(b.importedAt) - num(a.importedAt));
   state.currentSession = state.sessions.find(session => session.date === todayKey()) || null;
+  if (state.currentSession?.id !== state.activeDeckSessionId) {
+    state.activeDeckSessionId = state.currentSession?.id || null;
+    state.activeExerciseIndex = 0;
+  }
 }
 
 async function synchronizeTrainingDay(notify = false) {
@@ -311,15 +316,65 @@ function symptomsMarkup(session, editing = false) {
   return `<section class="symptom-section"><div class="symptom-head"><div><b>통증 및 이상 신호</b><span>GPT는 증상이 있으면 증량보다 안전을 우선해.</span></div><button class="secondary-btn compact-btn" ${action}="add-symptom">＋ 추가</button></div>${rows || '<p class="muted small">기록된 증상이 없어.</p>'}</section>`;
 }
 
+function deckSideMarkup(session, activeIndex, side) {
+  const left = side === 'left';
+  const remaining = left ? activeIndex : session.exercises.length - activeIndex - 1;
+  if (!remaining) return '';
+  const cards = Array.from({ length: Math.min(3, remaining) }, (_, layer) => {
+    const index = left ? activeIndex - layer - 1 : activeIndex + layer + 1;
+    const log = session.exercises[index];
+    const direction = left ? -1 : 1;
+    return `<span class="deck-peek-card" style="--deck-x:${direction * (13 + layer * 7)}px;--deck-y:${layer * 5}px;--deck-rotation:${direction * (1 + layer * .55)}deg;--deck-scale:${1 - layer * .016}" aria-hidden="true"><i>${esc(exerciseNameFromLog(log))}</i></span>`;
+  }).reverse().join('');
+  return `<div class="deck-side deck-side-${side}" aria-hidden="true">${cards}<span class="deck-remaining">${left ? '이전' : '다음'} ${remaining}</span></div>`;
+}
+
+function workoutDeckMarkup(session) {
+  state.activeExerciseIndex = Math.max(0, Math.min(state.activeExerciseIndex, session.exercises.length - 1));
+  const index = state.activeExerciseIndex;
+  const completed = session.exercises.filter(log => log.sets.some(set => set.done)).length;
+  const dots = session.exercises.map((log, dotIndex) => `<button class="deck-dot ${dotIndex === index ? 'active' : ''} ${log.sets.some(set => set.done) ? 'has-work' : ''}" data-action="select-deck-card" data-deck-index="${dotIndex}" aria-label="${dotIndex + 1}번 ${esc(exerciseNameFromLog(log))} 카드"></button>`).join('');
+  return `<section class="workout-deck" aria-label="오늘 운동 카드 덱">
+    <div class="deck-status"><div><p class="eyebrow">LIVE DECK</p><b>${index + 1} / ${session.exercises.length}</b></div><div class="deck-session-progress"><span>${completed}장 기록 시작</span><i><b style="width:${session.exercises.length ? completed / session.exercises.length * 100 : 0}%"></b></i></div></div>
+    <div class="workout-deck-stage" data-workout-deck>
+      ${deckSideMarkup(session, index, 'left')}
+      <div class="workout-active-card">${exerciseCard(session.exercises[index], index)}</div>
+      ${deckSideMarkup(session, index, 'right')}
+    </div>
+    <div class="deck-controls"><button class="deck-arrow" data-action="deck-prev" ${index === 0 ? 'disabled' : ''} aria-label="이전 운동">‹</button><div class="deck-dots">${dots}</div><button class="deck-arrow" data-action="deck-next" ${index === session.exercises.length - 1 ? 'disabled' : ''} aria-label="다음 운동">›</button></div>
+    <p class="deck-hint">카드를 좌우로 밀어 다음 운동으로 넘겨.</p>
+  </section>`;
+}
+
+function completedTodayPack(session) {
+  const date = dateFromKey(session.date);
+  const names = session.exercises.map(exerciseNameFromLog);
+  return `<section class="completed-pack-scene">
+    <div class="pack-shadow" aria-hidden="true"></div>
+    <button class="sealed-session-pack" data-action="open-completed-pack" data-session-id="${esc(session.id)}" aria-label="${esc(session.date)} 운동 카드팩 열기">
+      <span class="pack-topline"><b>PR+</b><em>TRAINING ARCHIVE</em></span>
+      <span class="pack-date"><strong>${String(date.getDate()).padStart(2, '0')}</strong><i>${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')} · ${dayKo(session.date)}</i></span>
+      <span class="pack-routine">${esc(session.routineName || 'CUSTOM SESSION')}</span>
+      <span class="pack-summary">${session.exercises.length} CARDS · ${hardSets(session)} SETS · ${Math.round(sessionVolume(session)).toLocaleString()} KG</span>
+      <span class="pack-card-spines">${names.slice(0, 5).map((name, index) => `<i style="--spine-left:${index * 9}px;--spine-right:${(4 - index) * 5}px;--spine-top:${index * 2}px">${esc(name)}</i>`).join('')}</span>
+      <span class="pack-open-label">TAP TO OPEN ↗</span>
+    </button>
+    <div class="completed-pack-copy"><p class="eyebrow">PACK SEALED</p><h3>오늘의 운동이 한 팩으로 보관됐어.</h3><p>기록에서 이 날짜 팩을 열면 운동 카드가 다시 펼쳐져.</p></div>
+    <div class="completed-pack-actions"><button class="primary-btn" data-action="open-completed-pack" data-session-id="${esc(session.id)}">기록 카드팩 열기</button><button class="ghost-btn" data-action="resume-session">운동 다시 열기</button></div>
+  </section>`;
+}
+
 function renderToday() {
   const session = state.currentSession;
   const date = dateFromKey(todayKey());
   const dateLabel = `${date.getMonth() + 1}월 ${date.getDate()}일 ${['일', '월', '화', '수', '목', '금', '토'][date.getDay()]}요일`;
   let html = `<div class="section-head"><div><h2>오늘의 훈련</h2><p>운동일은 오전 7시에 바뀐다.</p></div><div class="date-chip">${dateLabel}</div></div>`;
   if (!session || !session.exercises.length) {
-    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.3.2 · BEAT YOUR LAST</p><div class="hero-value">START TRUE.</div><p class="muted small">실제 수행을 기록하면 다음 세션의 중량 · 횟수 · 시간을 계산해.</p></div>`;
+    html += `<div class="card hero-card"><p class="eyebrow">PR+ 0.4.0 · BUILD THE DECK</p><div class="hero-value">DEAL. LIFT. STACK.</div><p class="muted small">운동은 한 장씩 집중하고, 끝난 하루는 하나의 카드팩으로 보관해.</p></div>`;
     html += `<div class="routine-start-grid">${state.routines.map(routineStartCard).join('')}</div>`;
     html += `<button class="secondary-btn wide manual-start" data-action="add-exercise">루틴 없이 운동 추가</button>`;
+  } else if (session.finishedAt) {
+    html += completedTodayPack(session);
   } else {
     const routineLabel = session.routineName ? `<span class="badge pr-badge">${esc(session.routineName)}</span>` : '';
     html += `<div class="session-title-row"><div>${routineLabel}${session.finishedAt ? '<span class="badge">완료됨</span>' : '<span class="badge">기록 중</span>'}</div><button class="secondary-btn compact-btn ${state.editTodayOrder ? 'active-edit-btn' : ''}" data-action="toggle-session-edit">${state.editTodayOrder ? '편집 완료' : '운동 순서 편집'}</button></div>`;
@@ -330,12 +385,59 @@ function renderToday() {
     html += `<div class="stats-grid"><div class="stat-card"><span>오늘 완료 세트</span><b>${hardSets(session)}</b></div><div class="stat-card"><span>총 볼륨</span><b>${Math.round(sessionVolume(session)).toLocaleString()}<small> kg</small></b></div></div>`;
     html += `<div class="baseline-banner"><b>Progressive Overload</b><span>LAST와 NEXT를 참고하고, 오늘 실제 수행값과 RIR을 기록해.</span></div>`;
     if (state.editTodayOrder) html += '<div class="session-edit-banner">화살표로 순서를 바꾸거나 이 세션에서 운동을 삭제할 수 있어. 루틴 원본은 바뀌지 않아.</div>';
-    session.exercises.forEach((log, index) => { html += exerciseCard(log, index); });
+    html += workoutDeckMarkup(session);
     html += `<label class="session-note"><span>오늘 메모</span><textarea class="text-input" data-session-note placeholder="컨디션, 자세, 통증 없이 느낀 점…">${esc(session.notes || '')}</textarea></label>`;
     html += symptomsMarkup(session);
     html += `<div class="session-actions"><button class="secondary-btn wide" data-action="add-exercise">＋ 운동 추가</button><button class="secondary-btn wide" data-action="feedback-today">GPT 코치 요청 복사</button><button class="primary-btn wide" data-action="finish-session">오늘 운동 완료</button></div>`;
   }
   app.innerHTML = html;
+}
+
+function navigateWorkoutDeck(targetIndex) {
+  const session = state.currentSession;
+  if (!session || state.deckAnimating) return;
+  const target = Math.max(0, Math.min(targetIndex, session.exercises.length - 1));
+  if (target === state.activeExerciseIndex) return;
+  const activeCard = document.querySelector('.workout-active-card');
+  state.deckAnimating = true;
+  activeCard?.classList.add(target > state.activeExerciseIndex ? 'deal-out-left' : 'deal-out-right');
+  setTimeout(() => {
+    state.activeExerciseIndex = target;
+    state.deckAnimating = false;
+    renderToday();
+  }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 20 : 260);
+}
+
+async function runPackCompletionAnimation(session) {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'pack-completion-overlay';
+  const names = session.exercises.slice(0, 10).map(exerciseNameFromLog);
+  overlay.innerHTML = `<div class="pack-animation-title"><span>SESSION COMPLETE</span><b>${esc(session.date)}</b></div>
+    <div class="pack-animation-cards">${names.map((name, index) => {
+      const spread = (index - (names.length - 1) / 2) * 14;
+      const lift = 18 + (index % 3) * 12;
+      return `<div class="packing-card" style="--spread:${spread}px;--lift:${lift}px;--rotation:${spread / 3}deg;--gather-delay:${index * 45}ms;--seal-delay:${780 + index * 18}ms"><span>PR+</span><b>${esc(name)}</b></div>`;
+    }).join('')}</div>
+    <div class="pack-animation-target"><span>${esc(session.date)}</span><b>${session.exercises.length} CARDS</b><i>ARCHIVED</i></div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('is-running')));
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  overlay.remove();
+}
+
+async function completeCurrentSession() {
+  const session = state.currentSession;
+  if (!session || session.finishedAt) return;
+  if (state.durationTimer) return toast('진행 중인 시간 타이머를 먼저 종료해줘.');
+  if (!session.exercises.some(log => completedSets(log).length) && !await confirmAsk('빈 카드팩 보관', '완료한 세트가 아직 없어. 그래도 오늘 운동을 완료할까?')) return;
+  session.finishedAt = Date.now();
+  await saveCurrentSession();
+  dismissRestTimer();
+  await runPackCompletionAnimation(session);
+  await refreshData();
+  renderToday();
+  toast('오늘 운동 카드팩을 기록에 보관했어.');
 }
 
 function formatCompletedSet(set, config) {
@@ -542,7 +644,7 @@ async function startCoachSession(planId, sessionIndex) {
     scheduleOffsetDays: scheduleOffset, scheduleStatus: scheduleStatus(scheduleOffset),
     protocolVersion: plan.protocolVersion
   };
-  session.exercises = logs; session.startedAt = Date.now(); session.finishedAt = null;
+  session.exercises = logs; session.startedAt = Date.now(); session.finishedAt = null; state.activeExerciseIndex = 0;
   await saveCurrentSession(); await refreshData(); state.view = 'today'; render();
   toast(scheduleOffset ? `추천 일정을 ${Math.abs(scheduleOffset)}일 ${scheduleOffset > 0 ? '미뤄' : '당겨'} 불러왔어.` : 'GPT 목표를 참고용으로 불러왔어. 실제 수행값은 비어 있어.');
 }
@@ -588,8 +690,8 @@ function renderHistory() {
   const restDays = timeline.filter(item => !item.session).length;
   app.innerHTML = `<div class="section-head"><div><h2>운동 기록</h2><p>${trainingDays}일 훈련 · ${restDays}일 휴식</p></div><button class="primary-btn compact-btn" data-action="feedback-history">GPT 코치 요청</button></div>` +
     historyPeriodControls(range) + progressMarkup(range) + exerciseProgressMarkup() +
-    `<div class="subsection-head"><h3>${esc(range.label)} 기록</h3><p>미등록일은 휴식으로 표시하고, 휴식일에도 과거 기록을 추가할 수 있어.</p></div>` +
-    (timeline.length ? `<div class="card history-card">${visible.map(item => item.session ? historyItem(item.session) : restDayItem(item.date)).join('')}</div>${visible.length < timeline.length ? `<button class="secondary-btn wide history-more" data-action="load-more-history">이전 기록 더 보기 (${timeline.length - visible.length}일)</button>` : '<p class="history-end muted small">첫 기록까지 모두 불러왔어.</p>'}` : '<div class="card empty-state"><h3>아직 기록이 없어</h3><p>첫 운동을 시작하면 이후 미기록일이 휴식으로 정리돼.</p></div>');
+    `<div class="subsection-head pack-shelf-head"><h3>${esc(range.label)} 카드팩</h3><p>날짜 팩을 누르면 그날의 운동 카드가 펼쳐져. 미등록일은 빈 휴식 슬롯이야.</p></div>` +
+    (timeline.length ? `<div class="history-pack-shelf">${visible.map((item, index) => item.session ? historyItem(item.session, index) : restDayItem(item.date)).join('')}</div>${visible.length < timeline.length ? `<button class="secondary-btn wide history-more" data-action="load-more-history">이전 카드팩 더 보기 (${timeline.length - visible.length}일)</button>` : '<p class="history-end muted small">첫 카드팩까지 모두 불러왔어.</p>'}` : '<div class="card empty-state"><h3>아직 카드팩이 없어</h3><p>첫 운동을 완료하면 오늘의 운동 카드가 날짜 팩에 보관돼.</p></div>');
 }
 function historyPeriodRange(period = state.historyPeriod, anchorKey = state.historyAnchor || todayKey()) {
   const today = todayKey(); const anchor = dateFromKey(anchorKey > today ? today : anchorKey);
@@ -629,19 +731,28 @@ function historyTimeline(range = historyPeriodRange()) {
 }
 function restDayItem(dateKey) {
   const date = dateFromKey(dateKey);
-  return `<div class="history-entry rest-entry"><div class="history-item"><span class="history-date"><b>${date.getDate()}</b><span>${date.getMonth() + 1}월 · ${dayKo(dateKey)}</span></span><span class="history-main"><strong>휴식</strong><small>등록된 운동 없음</small></span><button class="ghost-btn compact-btn" data-action="add-past-session" data-date="${esc(dateKey)}">기록 추가</button></div></div>`;
+  return `<article class="rest-pack-slot"><div class="rest-pack-date"><b>${String(date.getDate()).padStart(2, '0')}</b><span>${date.getMonth() + 1}월 · ${dayKo(dateKey)}</span></div><div><strong>REST SLOT</strong><small>등록된 운동 없음</small></div><button class="ghost-btn compact-btn" data-action="add-past-session" data-date="${esc(dateKey)}">기록 추가</button></article>`;
 }
-function historyItem(session) {
+function historyItem(session, shelfIndex = 0) {
   const date = new Date(`${session.date}T12:00:00`);
-  const completedLogs = session.exercises.filter(log => log.sets.some(set => set.done));
+  const archivedLogs = session.exercises || [];
+  const completedLogs = archivedLogs.filter(log => log.sets.some(set => set.done));
   const names = completedLogs.map(exerciseNameFromLog).join(', ');
   const expanded = state.expandedSessionId === session.id;
-  const detail = expanded ? `<div class="history-detail">${completedLogs.map(log => {
+  const detail = expanded ? `<div class="history-pack-contents">${archivedLogs.map((log, cardIndex) => {
     const exercise = exerciseById(log.exerciseId) || log;
-    const sets = completedSets(log).map(set => formatCompletedSet(set, { ...exercise, ...log })).join(' · ');
-    return `<button class="history-exercise" data-action="exercise-detail" data-exercise-id="${esc(log.exerciseId)}"><b>${esc(exerciseNameFromLog(log))}</b><span>${esc(sets)}</span></button>`;
-  }).join('') || '<p class="muted small">완료 체크된 세트가 아직 없어.</p>'}${session.notes ? `<p class="history-note">${esc(session.notes)}</p>` : ''}<button class="secondary-btn compact-btn history-edit-btn" data-action="edit-session" data-session-id="${esc(session.id)}">이 기록 편집</button></div>` : '';
-  return `<div class="history-entry"><button class="history-item" data-action="toggle-history" data-session-id="${esc(session.id)}"><span class="history-date"><b>${date.getDate()}</b><span>${date.getMonth() + 1}월 · ${dayKo(session.date)}</span></span><span class="history-main"><strong>${esc(session.routineName || names || '개별 운동')}</strong><small>${hardSets(session)}세트 · ${Math.round(sessionVolume(session)).toLocaleString()}kg</small></span><span class="badge">${session.finishedAt ? '완료' : '기록'}</span></button>${detail}</div>`;
+    const finishedSets = completedSets(log);
+    const sets = finishedSets.map(set => formatCompletedSet(set, { ...exercise, ...log })).join(' · ');
+    return `<button class="archive-exercise-card ${finishedSets.length ? '' : 'is-skipped'}" style="--card-rotation:${cardIndex % 3 - 1}deg;--card-delay:${cardIndex * 70}ms" data-action="exercise-detail" data-exercise-id="${esc(log.exerciseId)}"><span class="archive-card-no">CARD ${String(cardIndex + 1).padStart(2, '0')} · ${finishedSets.length ? `${finishedSets.length} SETS` : '미수행'}</span><b>${esc(exerciseNameFromLog(log))}</b><small>${finishedSets.length ? esc(sets) : '완료 체크된 세트 없음'}</small><i>${esc(muscleLabel(exercise.muscleGroup || 'other'))}</i></button>`;
+  }).join('') || '<p class="muted small">완료 체크된 세트가 아직 없어.</p>'}<div class="history-pack-footer">${session.notes ? `<p class="history-note">${esc(session.notes)}</p>` : ''}<button class="secondary-btn compact-btn history-edit-btn" data-action="edit-session" data-session-id="${esc(session.id)}">이 카드팩 편집</button></div></div>` : '';
+  return `<article class="history-session-pack ${expanded ? 'is-open' : ''}" style="--pack-tilt:${shelfIndex % 2 ? '.18deg' : '-.18deg'}">
+    <button class="history-pack-cover" data-action="toggle-history" data-session-id="${esc(session.id)}" aria-expanded="${expanded}">
+      <span class="history-pack-layers" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="history-pack-date"><strong>${String(date.getDate()).padStart(2, '0')}</strong><i>${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')} · ${dayKo(session.date)}</i></span>
+      <span class="history-pack-main"><em>PR+ / TRAINING PACK</em><b>${esc(session.routineName || names || '개별 운동')}</b><small>${archivedLogs.length} CARDS · ${hardSets(session)} SETS · ${Math.round(sessionVolume(session)).toLocaleString()} KG</small></span>
+      <span class="history-pack-state">${expanded ? 'CLOSE ↑' : 'OPEN ↓'}</span>
+    </button>${detail}
+  </article>`;
 }
 
 function showSessionEditor(session, isNew = false) {
@@ -736,12 +847,15 @@ function progressMarkup(range = historyPeriodRange()) {
   const totals = periodTotals(completed, range.from, range.to); const previous = previousPeriodTotals(range);
   const buckets = periodBuckets(range, completed);
   const comparisonLabel = state.historyPeriod === 'all' ? '전체 누적' : '직전 같은 기간 대비';
-  return `<div class="subsection-head"><h3>${esc(range.label)} 성장 지표</h3><p>위에서 고른 기간에 맞춰 목록과 모든 합계를 다시 계산해.</p></div>
+  return `<div class="subsection-head"><h3>${esc(range.label)} 성장 지표</h3><p>선택한 기간의 카드팩을 한 장의 강판처럼 압축한 기록이야.</p></div>
+    <section class="stats-press" aria-label="${esc(range.label)} 압축 통계"><div class="press-jaw"><span>PR+ HYDRAULIC DATA PRESS</span><b>${esc(range.label)}</b></div><div class="pressed-steel">
+    <div class="steel-stamp"><span>PERIOD / COMPRESSED</span><b>${esc(range.from)} — ${esc(range.to)}</b></div>
     <div class="growth-grid">${growthMetric('훈련일', totals.days, previous?.days, '일', comparisonLabel)}${growthMetric('Hard sets', totals.sets, previous?.sets, '세트', comparisonLabel)}${growthMetric('볼륨', Math.round(totals.volume), previous ? Math.round(previous.volume) : null, 'kg', comparisonLabel)}</div>
     ${periodTrendCard('VOLUME TREND', buckets, 'volume', 'kg')}${periodTrendCard('HARD SET TREND', buckets, 'sets', '세트')}${periodTrendCard('TRAINING DAY TREND', buckets, 'days', '일')}
-    <div class="card"><p class="eyebrow">MUSCLE · SETS / VOLUME</p>${Object.keys(muscleSets).length ? Object.entries(muscleSets).sort((a, b) => b[1] - a[1]).map(([muscle, value]) => `<div class="progress-row"><div class="progress-row-head"><span>${esc(muscleLabel(muscle))}</span><b>${value}세트 · ${Math.round(muscleVolumes[muscle] || 0).toLocaleString()}kg</b></div><div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, value / Math.max(1, totals.sets) * 100)}%"></div></div></div>`).join('') : '<p class="muted small">선택 기간에 완료 세트가 없어.</p>'}</div>
-    <div class="card"><p class="eyebrow">ESTIMATED 1RM</p>${topExercises.length ? topExercises.map(item => `<button class="metric-row" data-action="exercise-detail" data-exercise-id="${esc(item.exercise.id)}"><span><b>${esc(item.exercise.name)}</b><small>최고 세트 기반 Epley 추정</small></span><strong>${formatKg(item.e1rm)} kg</strong></button>`).join('') : '<p class="muted small">운동 기록을 입력하면 표시된다.</p>'}</div>
-    <div class="card body-weight-card"><div class="body-weight-head"><div><p class="eyebrow">BODY WEIGHT</p><h3>체중 변화</h3></div><div class="body-weight-input"><input id="bodyWeightInput" class="set-input" inputmode="decimal" value="${esc(todayWeight)}" placeholder="kg"><button class="secondary-btn compact-btn" data-action="save-body-weight">저장</button></div></div>${lineChartMarkup(bodyWeights.map(entry => num(entry.weight)), 'kg')}</div>`;
+    <div class="card steel-panel"><p class="eyebrow">MUSCLE · SETS / VOLUME</p>${Object.keys(muscleSets).length ? Object.entries(muscleSets).sort((a, b) => b[1] - a[1]).map(([muscle, value]) => `<div class="progress-row"><div class="progress-row-head"><span>${esc(muscleLabel(muscle))}</span><b>${value}세트 · ${Math.round(muscleVolumes[muscle] || 0).toLocaleString()}kg</b></div><div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, value / Math.max(1, totals.sets) * 100)}%"></div></div></div>`).join('') : '<p class="muted small">선택 기간에 완료 세트가 없어.</p>'}</div>
+    <div class="card steel-panel"><p class="eyebrow">ESTIMATED 1RM</p>${topExercises.length ? topExercises.map(item => `<button class="metric-row" data-action="exercise-detail" data-exercise-id="${esc(item.exercise.id)}"><span><b>${esc(item.exercise.name)}</b><small>최고 세트 기반 Epley 추정</small></span><strong>${formatKg(item.e1rm)} kg</strong></button>`).join('') : '<p class="muted small">운동 기록을 입력하면 표시된다.</p>'}</div>
+    <div class="card body-weight-card steel-panel"><div class="body-weight-head"><div><p class="eyebrow">BODY WEIGHT</p><h3>체중 변화</h3></div><div class="body-weight-input"><input id="bodyWeightInput" class="set-input" inputmode="decimal" value="${esc(todayWeight)}" placeholder="kg"><button class="secondary-btn compact-btn" data-action="save-body-weight">저장</button></div></div>${lineChartMarkup(bodyWeights.map(entry => num(entry.weight)), 'kg')}</div>
+    </div><div class="press-base"><span>FORGED FROM ${completed.length} TRAINING PACKS</span></div></section>`;
 }
 
 function periodTotals(sessions, from, to) {
@@ -786,12 +900,12 @@ function growthMetric(label, current, previous, suffix, comparisonLabel) {
 }
 function periodTrendCard(title, buckets, field, suffix) {
   const values = buckets.map(bucket => num(bucket[field])); const total = values.reduce((sum, value) => sum + value, 0);
-  return `<div class="card trend-card"><div class="trend-head"><p class="eyebrow">${title}</p><b>${formatKg(total)} ${suffix}</b></div>${lineChartMarkup(values, suffix)}<div class="chart-range"><span>${buckets[0]?.label || ''}</span><span>${buckets.at(-1)?.label || ''}</span></div></div>`;
+  return `<div class="card trend-card steel-panel"><div class="trend-head"><p class="eyebrow">${title}</p><b>${formatKg(total)} ${suffix}</b></div>${lineChartMarkup(values, suffix)}<div class="chart-range"><span>${buckets[0]?.label || ''}</span><span>${buckets.at(-1)?.label || ''}</span></div></div>`;
 }
 
 function seriesCard(title, pairs, suffix, hint = '') {
   if (!pairs.length) return '';
-  return `<div class="card trend-card"><div class="trend-head"><div><p class="eyebrow">${title}</p>${hint ? `<small>${esc(hint)}</small>` : ''}</div><b>${formatKg(pairs.at(-1).value)} ${suffix}</b></div>${lineChartMarkup(pairs.map(pair => pair.value), suffix)}<div class="chart-range"><span>${esc(pairs[0].date)}</span><span>${esc(pairs.at(-1).date)}</span></div></div>`;
+  return `<div class="card trend-card steel-panel"><div class="trend-head"><div><p class="eyebrow">${title}</p>${hint ? `<small>${esc(hint)}</small>` : ''}</div><b>${formatKg(pairs.at(-1).value)} ${suffix}</b></div>${lineChartMarkup(pairs.map(pair => pair.value), suffix)}<div class="chart-range"><span>${esc(pairs[0].date)}</span><span>${esc(pairs.at(-1).date)}</span></div></div>`;
 }
 function exerciseProgressMarkup() {
   const available = state.exercises.map(exercise => ({ exercise, count: exerciseHistory(exercise.id).length })).filter(item => item.count).sort((a, b) => b.count - a.count || a.exercise.name.localeCompare(b.exercise.name));
@@ -1236,6 +1350,7 @@ async function startRoutine(routineId) {
     const exercise = exerciseById(item.exerciseId);
     return exercise ? createSessionLog(exercise, item) : null;
   }).filter(Boolean);
+  state.activeExerciseIndex = 0;
   await saveCurrentSession(); await refreshData(); state.view = 'today'; render();
   window.scrollTo({ top: 0, behavior: 'smooth' }); toast(`${routine.name} 루틴을 시작했어.`);
 }
@@ -1245,6 +1360,7 @@ async function addExerciseToSession(exerciseId) {
   const exercise = exerciseById(exerciseId);
   if (!exercise) return toast('운동을 찾을 수 없어.');
   session.exercises.push(createSessionLog(exercise, { targetSets: exercise.type === 'warmup' ? 1 : 3, repMin: exercise.repMin, repMax: exercise.repMax, durationMin: exercise.durationMin, durationMax: exercise.durationMax, trackingMode: exercise.trackingMode, loadMode: exercise.loadMode, type: exercise.type }));
+  state.activeExerciseIndex = session.exercises.length - 1;
   await saveCurrentSession(); await refreshData(); render(); toast('오늘 운동에 추가했어.');
 }
 async function saveCurrentSession() {
@@ -1260,6 +1376,7 @@ async function moveCurrentExercise(index, direction) {
   [exercises[index], exercises[target]] = [exercises[target], exercises[index]];
   if (state.durationTimer?.exerciseIndex === index) state.durationTimer.exerciseIndex = target;
   else if (state.durationTimer?.exerciseIndex === target) state.durationTimer.exerciseIndex = index;
+  state.activeExerciseIndex = target;
   await saveCurrentSession(); renderToday();
 }
 async function removeCurrentSet(exerciseIndex, setIndex) {
@@ -1531,6 +1648,9 @@ app.addEventListener('click', async event => {
     await saveCurrentSession(); renderToday();
   }
   if (action === 'toggle-session-edit') { state.editTodayOrder = !state.editTodayOrder; renderToday(); }
+  if (action === 'deck-prev') navigateWorkoutDeck(state.activeExerciseIndex - 1);
+  if (action === 'deck-next') navigateWorkoutDeck(state.activeExerciseIndex + 1);
+  if (action === 'select-deck-card') navigateWorkoutDeck(num(button.dataset.deckIndex));
   if (action === 'move-session-exercise') await moveCurrentExercise(num(button.dataset.eidx), button.dataset.direction);
   if (action === 'start-routine') await startRoutine(button.dataset.routineId);
   if (action === 'open-coach-import') openCoachImport();
@@ -1553,7 +1673,15 @@ app.addEventListener('click', async event => {
     else if (state.durationTimer?.exerciseIndex > exerciseIndex) state.durationTimer.exerciseIndex -= 1;
     state.currentSession.exercises.splice(exerciseIndex, 1); await saveCurrentSession(); await refreshData(); render();
   }
-  if (action === 'finish-session') { state.currentSession.finishedAt = Date.now(); await saveCurrentSession(); await refreshData(); renderToday(); toast('오늘 운동을 완료했어.'); }
+  if (action === 'finish-session') await completeCurrentSession();
+  if (action === 'open-completed-pack') {
+    state.expandedSessionId = button.dataset.sessionId;
+    state.historyPeriod = 'day'; state.historyAnchor = state.currentSession?.date || todayKey();
+    state.view = 'history'; render(); window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  if (action === 'resume-session' && state.currentSession && await confirmAsk('카드팩 다시 열기', '완료 상태를 취소하고 오늘 운동을 계속 기록할까?')) {
+    state.currentSession.finishedAt = null; await saveCurrentSession(); await refreshData(); renderToday(); toast('오늘 운동 카드팩을 다시 열었어.');
+  }
   if (action === 'edit-routine') { state.editRoutineId = state.editRoutineId === button.dataset.routineId ? null : button.dataset.routineId; renderRoutines(); }
   if (action === 'add-routine-exercise') showExerciseDialog('routine', button.dataset.routineId);
   if (action === 'move-routine-item') {
@@ -1597,6 +1725,19 @@ app.addEventListener('click', async event => {
     await clearStore(STORES.sessions); await refreshData(); render(); toast('운동 기록을 초기화했어.');
   }
 });
+
+app.addEventListener('pointerdown', event => {
+  if (!event.target.closest('[data-workout-deck]') || event.target.closest('input, select, textarea, button, label')) return;
+  state.deckPointer = { x: event.clientX, y: event.clientY, id: event.pointerId };
+});
+app.addEventListener('pointerup', event => {
+  const start = state.deckPointer; state.deckPointer = null;
+  if (!start || start.id !== event.pointerId) return;
+  const dx = event.clientX - start.x; const dy = event.clientY - start.y;
+  if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.2) return;
+  navigateWorkoutDeck(state.activeExerciseIndex + (dx < 0 ? 1 : -1));
+});
+app.addEventListener('pointercancel', () => { state.deckPointer = null; });
 
 document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => {
   state.view = button.dataset.view; render(); window.scrollTo({ top: 0, behavior: 'smooth' });
